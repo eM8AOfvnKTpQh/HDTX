@@ -1,13 +1,14 @@
 #include "dtx/dtx.h"
 
-DTX::DTX(MetaManager *meta_man, QPManager *qp_man, VersionCache *status,
-         LockCache *lock_table, t_id_t tid, coro_id_t coroid,
-         CoroutineScheduler *sched, RDMABufferAllocator *rdma_buffer_allocator,
-         LogOffsetAllocator *remote_log_offset_allocator, AddrCache *addr_buf) {
+DTX::DTX(MetaManager* meta_man, QPManager* qp_man, VersionCache* status,
+         LockCache* lock_table, t_id_t tid, coro_id_t coroid,
+         CoroutineScheduler* sched, RDMABufferAllocator* rdma_buffer_allocator,
+         LogOffsetAllocator* remote_log_offset_allocator, AddrCache* addr_buf) {
   // Transaction setup
   tx_id = 0;
   t_id = tid;
   coro_id = coroid;
+  u_id = encode_id(t_id, coro_id);
   coro_sched = sched;
   global_meta_man = meta_man;
   thread_qp_man = qp_man;
@@ -22,9 +23,12 @@ DTX::DTX(MetaManager *meta_man, QPManager *qp_man, VersionCache *status,
 
   hit_local_cache_times = 0;
   miss_local_cache_times = 0;
+
+  tx_error = TXError::NO_ERROR;
+  lock_mode = LockMode::NORMAL;
 }
 
-bool DTX::ExeRO(coro_yield_t &yield) {
+bool DTX::ExeRO(coro_yield_t& yield) {
   // You can read from primary or backup
   std::vector<DirectRead> pending_direct_ro;
   std::vector<HashRead> pending_hash_ro;
@@ -44,19 +48,16 @@ bool DTX::ExeRO(coro_yield_t &yield) {
   // ro";
   auto res = CheckReadRO(pending_direct_ro, pending_hash_ro,
                          pending_invisible_ro, pending_next_hash_ro, yield);
-  if (!res) {
-    // RDMA_LOG(INFO) << "fail";
-  }
   return res;
 }
 
-bool DTX::ExeRW(coro_yield_t &yield) {
+bool DTX::ExeRW(coro_yield_t& yield) {
   // For read-only data from primary or backup
   std::vector<DirectRead> pending_direct_ro;
   std::vector<HashRead> pending_hash_ro;
 
   // For read-write data from primary
-  std::vector<LockRead> pending_lock_rw;
+  std::list<LockRead> pending_lock_rw;
   std::vector<DirectRead> pending_direct_rw;
   std::vector<HashRead> pending_hash_rw;
   std::vector<InsertOffRead> pending_insert_off_rw;
@@ -72,7 +73,7 @@ bool DTX::ExeRW(coro_yield_t &yield) {
 // RDMA_LOG(DBG) << "coro: " << coro_id << " tx_id: " << tx_id << " issue read
 // rorw";
 #if READ_LOCK
-  if (!IssueReadLock(pending_lock_rw, pending_hash_rw, pending_insert_off_rw))
+  if (!IssueReadLock(pending_hash_rw, pending_insert_off_rw, pending_lock_rw))
     return false;
 #else
   if (!IssueReadRW(pending_direct_rw, pending_hash_rw, pending_insert_off_rw))
@@ -86,10 +87,20 @@ bool DTX::ExeRW(coro_yield_t &yield) {
   // rorw";
   bool res = false;
 #if READ_LOCK
-  res = CheckReadRORW(pending_direct_ro, pending_hash_ro, pending_hash_rw,
-                      pending_insert_off_rw, pending_lock_rw,
-                      pending_invisible_ro, pending_next_hash_ro,
-                      pending_next_hash_rw, pending_next_off_rw, yield);
+  if (global_meta_man->txn_system == DTX_SYS::FORD) {
+    res = CheckReadRORW(pending_direct_ro, pending_hash_ro, pending_hash_rw,
+                        pending_insert_off_rw, pending_lock_rw,
+                        pending_invisible_ro, pending_next_hash_ro,
+                        pending_next_hash_rw, pending_next_off_rw, yield);
+  } else if (global_meta_man->txn_system == DTX_SYS::HDTX) {
+    res = CheckReadRORWLock(pending_direct_ro, pending_hash_ro, pending_hash_rw,
+                            pending_insert_off_rw, pending_lock_rw,
+                            pending_invisible_ro, pending_next_hash_ro,
+                            pending_next_hash_rw, pending_next_off_rw, yield);
+  } else {
+    RDMA_LOG(ERROR) << "Unknown system.";
+    exit(EXIT_FAILURE);
+  }
 #else
   res = CompareCheckReadRORW(
       pending_direct_ro, pending_direct_rw, pending_hash_ro, pending_hash_rw,
@@ -98,16 +109,18 @@ bool DTX::ExeRW(coro_yield_t &yield) {
 #endif
 
 #if COMMIT_TOGETHER
-  ParallelUndoLog();
+  if (global_meta_man->txn_system == DTX_SYS::FORD) {
+    ParallelUndoLog();
+  }
 #endif
 
   return res;
 }
 
-bool DTX::Validate(coro_yield_t &yield) {
+bool DTX::Validate(coro_yield_t& yield) {
   // The transaction is read-write, and all the written data have been locked
   // before
-  if (read_only_set.empty()) {
+  if (not_locked_rw_set.empty() && read_only_set.empty()) {
     // TLOG(DBG, t_id) << "save validation";
     return true;
   }
@@ -123,9 +136,7 @@ bool DTX::Validate(coro_yield_t &yield) {
     return false;
   }
 #else
-  if (!IssueRemoteValidate(pending_validate)) {
-    return false;
-  }
+  if (!IssueRemoteValidate(pending_validate)) return false;
 #endif
 
   // Yield to other coroutines when waiting for network replies
@@ -136,20 +147,20 @@ bool DTX::Validate(coro_yield_t &yield) {
 }
 
 // Invisible + write primary and backups
-bool DTX::CoalescentCommit(coro_yield_t &yield) {
+bool DTX::CoalescentCommit(coro_yield_t& yield) {
   tx_status = TXStatus::TX_COMMIT;
-  char *cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
+  char* cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
 #if LOCAL_LOCK
-  *(lock_t *)cas_buf = STATE_INVISIBLE;
+  *(lock_t*)cas_buf = STATE_INVISIBLE;
 #else
-  *(lock_t *)cas_buf = encode_id(t_id, coro_id) | STATE_INVISIBLE;
+  *(lock_t*)cas_buf = u_id | STATE_INVISIBLE;
 #endif
 
   std::vector<CommitWrite> pending_commit_write;
 
   // Check whether all the log ACKs have returned
   while (!coro_sched->CheckLogAck(coro_id)) {
-    // wait
+    ;  // wait
   }
 
 #if RFLUSH == 0
@@ -162,105 +173,104 @@ bool DTX::CoalescentCommit(coro_yield_t &yield) {
 
   coro_sched->Yield(yield, coro_id);
 
-  *((lock_t *)cas_buf) = 0;
+  *((lock_t*)cas_buf) = 0;
 
   auto res = CheckCommitAll(pending_commit_write, cas_buf);
 
   return res;
 }
 
-bool DTX::ValidateCommit(coro_yield_t &yield,
-                         std::vector<ReleaseWrite> &pending_release) {
+bool DTX::ValidateCommit(coro_yield_t& yield,
+                         std::vector<ReleaseWrite>& pending_release) {
   tx_status = TXStatus::TX_VAL;
-  // 1. validate
-  std::vector<ValidateRead> pending_validate;
-  if (!IssueRemoteValidate(pending_validate)) {
-    RDMA_LOG(ERROR) << "fail";
-    return false;
-  }
 
 #if USE_VALIDATE_COMMIT
-  // 2. make read-write-set invisible on all nodes
+  // 1. Make read-write-set invisible on all nodes.
   if (!IssueInvisableAll(pending_release)) {
-    RDMA_LOG(ERROR) << "fail";
+    RDMA_LOG(ERROR) << "Failed to issue invisable request.";
     return false;
   }
 
-  // 3. send the redo log to all nodes
+  // 2. Send the redo log to all nodes.
   if (!ParallelRedoLog(pending_release)) {
-    RDMA_LOG(ERROR) << "fail";
+    RDMA_LOG(ERROR) << "Failed to issue redo-log request.";
     return false;
   }
 #endif
 
+  // 3. Validate version and visable.
+  std::vector<ValidateRead> pending_validate;
+  if (!IssueValidateVersionAndVisibility(pending_validate)) {
+    RDMA_LOG(ERROR) << "Failed to issue validate request.";
+    return false;
+  }
+
   coro_sched->Yield(yield, coro_id);
 
-  // RDMA_LOG(INFO) << "validate";
-
-  auto ret = CheckValidate(pending_validate);
+  auto ret = CheckVersionAndVisibility(pending_validate);
 
   if (!ret) {
-    // RDMA_LOG(ERROR) << "fail";
+    // RDMA_LOG(ERROR) << "Validate failed.";
+    // RDMA_LOG(INFO) << tx_status;
   }
 
   return ret;
 }
 
-bool DTX::ReplayRedoLogAsync(coro_yield_t &yield,
-                             std::vector<ReleaseWrite> &pending_release) {
-  // RDMA_LOG(INFO) << "release";
+bool DTX::ReplayRedoLogAsync(coro_yield_t& yield,
+                             std::vector<ReleaseWrite>& pending_release) {
+  // RDMA_LOG(INFO) << "Release phase.";
 
 #if !USE_VALIDATE_COMMIT
-  // 2. make read-write-set invisible on all nodes
+  // 1. Make read-write-set invisible on all nodes.
   if (!IssueInvisableAll(pending_release)) {
-    RDMA_LOG(ERROR) << "fail";
+    RDMA_LOG(ERROR) << "Failed to issue invisable request.";
     return false;
   }
 
-  // 3. send the redo log to all nodes
+  // 2. Send the redo log to all nodes.
   if (!ParallelRedoLog(pending_release)) {
-    RDMA_LOG(ERROR) << "fail";
+    RDMA_LOG(ERROR) << "Failed to issue redo-log request.";
     return false;
   }
 
   coro_sched->Yield(yield, coro_id);
 #endif
 
-  // Check whether all the log ACKs have returned
+  // Check whether all the log ACKs have returned.
   while (!coro_sched->CheckLogAck(coro_id)) {
-    // RDMA_LOG(INFO) << "wait";
+    // RDMA_LOG(INFO) << "Check log ack";
     //  wait
   }
 
   tx_status = TXStatus::TX_COMMIT;
 
-  // replay redo log
+  // Replay redo log (not wait).
   if (!IssueReplayRedoLog(pending_release)) return false;
 
-  // no wait
   return true;
 }
 
 void DTX::ParallelUndoLog() {
   // Write the old data from read write set
   size_t log_size = sizeof(tx_id) + sizeof(t_id);
-  for (auto &set_it : read_write_set) {
+  for (auto& set_it : read_write_set) {
     if (!set_it.is_logged && !set_it.item_ptr->user_insert) {
       // For the newly inserted data, the old data are not needed to be recorded
       log_size += DataItemSize;
     }
   }
-  char *written_log_buf = thread_rdma_buffer_alloc->Alloc(log_size);
+  char* written_log_buf = thread_rdma_buffer_alloc->Alloc(log_size);
 
   offset_t cur = 0;
-  *((tx_id_t *)(written_log_buf + cur)) = tx_id;
+  *((tx_id_t*)(written_log_buf + cur)) = tx_id;
   cur += sizeof(tx_id);
-  *((t_id_t *)(written_log_buf + cur)) = t_id;
+  *((t_id_t*)(written_log_buf + cur)) = t_id;
   cur += sizeof(t_id);
 
-  for (auto &set_it : read_write_set) {
+  for (auto& set_it : read_write_set) {
     if (!set_it.is_logged && !set_it.item_ptr->user_insert) {
-      memcpy(written_log_buf + cur, (char *)(set_it.item_ptr.get()),
+      memcpy(written_log_buf + cur, (char*)(set_it.item_ptr.get()),
              DataItemSize);
       cur += DataItemSize;
       set_it.is_logged = true;
@@ -271,52 +281,52 @@ void DTX::ParallelUndoLog() {
   for (int i = 0; i < global_meta_man->remote_nodes.size(); i++) {
     offset_t log_offset =
         thread_remote_log_offset_alloc->GetNextLogOffset(i, log_size);
-    RCQP *qp = thread_qp_man->GetRemoteLogQPWithNodeID(i);
+    RCQP* qp = thread_qp_man->GetRemoteLogQPWithNodeID(i);
     coro_sched->RDMALog(coro_id, tx_id, qp, written_log_buf, log_offset,
                         log_size);
   }
 }
 
-bool DTX::ParallelRedoLog(std::vector<ReleaseWrite> &pending_release) {
+bool DTX::ParallelRedoLog(std::vector<ReleaseWrite>& pending_release) {
   if (read_write_set.empty()) return true;
 
-  // 1. calculate the size of log
+  // 1. Calculate the size of log.
   size_t head_size = sizeof(tx_id) + sizeof(t_id);
   size_t log_size = head_size;
-  for (auto &set_it : read_write_set) {
+  for (auto& set_it : read_write_set) {
     log_size += DataItemSize;
   }
 
-  // 2. save the updated data into the log
-  char *written_log_buf = thread_rdma_buffer_alloc->Alloc(log_size);
+  // 2. Save the updated data into the log.
+  char* written_log_buf = thread_rdma_buffer_alloc->Alloc(log_size);
 
   offset_t cur = 0;
-  *((tx_id_t *)(written_log_buf + cur)) = tx_id;
+  *((tx_id_t*)(written_log_buf + cur)) = tx_id;
   cur += sizeof(tx_id);
-  *((t_id_t *)(written_log_buf + cur)) = t_id;
+  *((t_id_t*)(written_log_buf + cur)) = t_id;
   cur += sizeof(t_id);
 
-  for (auto &set_it : read_write_set) {
+  for (auto& set_it : read_write_set) {
     auto it = set_it.item_ptr;
-    // update the version that user specified
+    // Update the version that user specified.
     version_t old_version = it->version;
-    if (!it->user_insert) it->version = tx_id;  // use tx_id as version number
-    memcpy(written_log_buf + cur, (char *)(it.get()), DataItemSize);
-    // set old value for validate
+    if (!it->user_insert) it->version = tx_id;  // Use tx_id as version number
+    memcpy(written_log_buf + cur, (char*)(it.get()), DataItemSize);
+    // Set old value for validate later.
     it->version = old_version;
     cur += DataItemSize;
     set_it.is_logged = true;
   }
 
-  // 3. write redo log to all memory nodes
+  // 3. Write redo log to all memory nodes.
   bool ret = true;
   for (int i = 0; i < global_meta_man->remote_nodes.size(); i++) {
-    RCQP *qp = thread_qp_man->GetRemoteLogQPWithNodeID(i);
+    RCQP* qp = thread_qp_man->GetRemoteLogQPWithNodeID(i);
     offset_t log_offset =
         thread_remote_log_offset_alloc->GetNextLogOffset(i, log_size);
-    // setup log addr
-    for (auto &it : pending_release) {
-      if (it.node_id == global_meta_man->remote_nodes[i].node_id) {
+    // Setup log addr
+    for (auto& it : pending_release) {
+      if (it.node_id == i) {
         it.remote_log_addr = qp->remote_mr_.buf + log_offset + head_size +
                              DataItemSize * it.index;
       }
@@ -332,22 +342,23 @@ bool DTX::ParallelRedoLog(std::vector<ReleaseWrite> &pending_release) {
 
 void DTX::Abort() {
   if (global_meta_man->txn_system == DTX_SYS::HDTX) {
-    char *unlock_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
+    char* unlock_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
 
-    for (auto &index : locked_rw_set) {
+    for (auto& index : locked_rw_set) {
       auto it = read_write_set[index].item_ptr;
       node_id_t primary_node_id =
           global_meta_man->GetPrimaryNodeID(it->table_id);
-      RCQP *primary_qp =
+      RCQP* primary_qp =
           thread_qp_man->GetRemoteDataQPWithNodeID(primary_node_id);
 
-      uint64_t compare_add = 0, swap;
-      // set visable
+      uint64_t compare_add = 0, swap = 0;
+      // If transaction fails during validation and commit phases, make the
+      // read-write-set's items visable
       if (tx_status != TXStatus::TX_EXE) {
         compare_add = STATE_VISIBLE;
       }
 #if USE_CAS
-      compare_add |= encode_id(t_id, coro_id);
+      compare_add |= u_id;
       swap = STATE_CLEAN;
 
       auto rc = primary_qp->post_cas(unlock_buf, it->GetRemoteLockAddr(),
@@ -370,25 +381,24 @@ void DTX::Abort() {
     // When failures occur, transactions need to be aborted.
     // In general, the transaction will not abort during committing replicas if
     // no hardware failure occurs
-    char *unlock_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
-    *((lock_t *)unlock_buf) = 0;
-    for (auto &index : locked_rw_set) {
-      auto it = read_write_set[index].item_ptr;
+    char* unlock_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
+    *((lock_t*)unlock_buf) = 0;
+    for (auto& index : locked_rw_set) {
+      auto& it = read_write_set[index].item_ptr;
       node_id_t primary_node_id =
           global_meta_man->GetPrimaryNodeID(it->table_id);
-      RCQP *primary_qp =
+      RCQP* primary_qp =
           thread_qp_man->GetRemoteDataQPWithNodeID(primary_node_id);
-      // auto rc =
-      //     primary_qp->post_send(IBV_WR_RDMA_WRITE, unlock_buf,
-      //     sizeof(lock_t),
-      //                           it->GetRemoteLockAddr(), 0);
 
-      uint64_t compare = encode_id(t_id, coro_id);
+      //     auto rc = primary_qp->post_send(IBV_WR_RDMA_WRITE, unlock_buf,
+      //     sizeof(lock_t), it->GetRemoteLockAddr(), 0);
+      uint64_t compare = u_id;
       if (global_meta_man->txn_system == DTX_SYS::FORD) {
         if (tx_status == TXStatus::TX_COMMIT) {
           compare |= STATE_INVISIBLE;
         }
       }
+      // Use CAS to avoid releasing unacquired locks
       auto rc = primary_qp->post_cas(unlock_buf, it->GetRemoteLockAddr(),
                                      compare, STATE_CLEAN, 0);
 
@@ -398,6 +408,5 @@ void DTX::Abort() {
       }
     }
   }
-
-  tx_status = TXStatus::TX_ABORT;
+  // tx_status = TXStatus::TX_ABORT;
 }

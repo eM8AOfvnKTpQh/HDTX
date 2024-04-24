@@ -58,6 +58,7 @@ void WriteUnlockBatch::SetWriteReq(char *local_addr, uint64_t remote_off,
 }
 
 void WriteUnlockBatch::SetUnLockReq(char *local_addr, uint64_t remote_off) {
+  use_atomic = false;
   sr[1].opcode = IBV_WR_RDMA_WRITE;
   sr[1].send_flags |= IBV_SEND_INLINE;
   sr[1].wr.rdma.remote_addr = remote_off;
@@ -68,6 +69,7 @@ void WriteUnlockBatch::SetUnLockReq(char *local_addr, uint64_t remote_off) {
 void WriteUnlockBatch::SetUnLockReq(char *local_addr, uint64_t remote_off,
                                     LockType type, uint64_t compare_add,
                                     uint64_t swap) {
+  use_atomic = true;
   sr[1].opcode =
       (type == CAS) ? IBV_WR_ATOMIC_CMP_AND_SWP : IBV_WR_ATOMIC_FETCH_AND_ADD;
   sr[1].wr.atomic.remote_addr = remote_off;
@@ -78,8 +80,7 @@ void WriteUnlockBatch::SetUnLockReq(char *local_addr, uint64_t remote_off,
 }
 
 bool WriteUnlockBatch::SendReqs(CoroutineScheduler *coro_sched, RCQP *qp,
-                                coro_id_t coro_id, bool use_off,
-                                bool use_atomic) {
+                                coro_id_t coro_id, bool use_off) {
   if (use_off) sr[0].wr.rdma.remote_addr += qp->remote_mr_.buf;
   sr[0].wr.rdma.rkey = qp->remote_mr_.key;
   sge[0].lkey = qp->local_mr_.key;
@@ -310,5 +311,34 @@ bool ComparatorUpdateRemote::SendReqs(CoroutineScheduler *coro_sched, RCQP *qp,
   sge[2].lkey = qp->local_mr_.key;
 
   if (!coro_sched->RDMABatch(coro_id, qp, &(sr[0]), &bad_sr, 2)) return false;
+  return true;
+}
+
+void ReadVersionVisibilityBatch::SetReadVersionReq(char *local_addr,
+                                                   uint64_t remote_off) {
+  sr[0].opcode = IBV_WR_RDMA_READ;
+  sr[0].wr.rdma.remote_addr = remote_off;
+  sge[0].addr = (uint64_t)local_addr;
+  sge[0].length = sizeof(uint64_t);
+}
+
+void ReadVersionVisibilityBatch::SetReadVisibilityReq(char *local_addr,
+                                                      uint64_t remote_off) {
+  sr[1].opcode = IBV_WR_RDMA_READ;
+  sr[1].wr.rdma.remote_addr = remote_off;
+  sge[1].addr = (uint64_t)local_addr;
+  sge[1].length = sizeof(uint64_t);
+}
+
+bool ReadVersionVisibilityBatch::SendReqs(CoroutineScheduler *coro_sched,
+                                          RCQP *qp, coro_id_t coro_id) {
+  sr[0].wr.rdma.remote_addr += qp->remote_mr_.buf;
+  sr[0].wr.rdma.rkey = qp->remote_mr_.key;
+  sge[0].lkey = qp->local_mr_.key;
+  sr[1].wr.rdma.remote_addr += qp->remote_mr_.buf;
+  sr[1].wr.rdma.rkey = qp->remote_mr_.key;
+  sge[1].lkey = qp->local_mr_.key;
+
+  if (!coro_sched->RDMABatch(coro_id, qp, &sr[0], &bad_sr, 1)) return false;
   return true;
 }

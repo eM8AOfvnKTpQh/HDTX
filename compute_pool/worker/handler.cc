@@ -21,6 +21,11 @@ std::vector<double> medianlat_vec;  // 50th latency
 std::vector<double> taillat_vec;    // 99th latency
 std::vector<double> avglat_vec;     // avg latency
 std::vector<int> sla_vec;
+std::vector<int> commit_vec;
+std::vector<int> val_fail_vec;
+std::vector<double> sample_taillat_vec;
+std::vector<double> sample_avglat_vec;
+std::vector<int> sample_commit_vec;
 std::vector<double> lock_durations;
 std::vector<uint64_t> total_try_times;
 std::vector<uint64_t> total_commit_times;
@@ -41,14 +46,10 @@ void Handler::ConfigureComputeNode(int argc, char* argv[]) {
   int txn_system_value = 0;
   if (system_name.find("farm") != std::string::npos) {
     txn_system_value = 0;
-  } else if (system_name.find("drtm") != std::string::npos) {
-    txn_system_value = 1;
   } else if (system_name.find("ford") != std::string::npos) {
-    txn_system_value = 2;
-  } else if (system_name.find("local") != std::string::npos) {
-    txn_system_value = 3;
+    txn_system_value = 1;
   } else if (system_name.find("hdtx") != std::string::npos) {
-    txn_system_value = 4;
+    txn_system_value = 2;
   }
   std::string s =
       "sed -i '8c \"txn_system\": " + std::to_string(txn_system_value) + ",' " +
@@ -66,6 +67,10 @@ void Handler::GenThreads(std::string bench_name) {
   t_id_t thread_num_per_machine =
       (t_id_t)client_conf.get("thread_num_per_machine").get_int64();
   const int coro_num = (int)client_conf.get("coroutine_num").get_int64();
+  int sla_timeout = (int)client_conf.get("sla_timeout").get_int64();
+  int use_priority = (int)client_conf.get("use_priority").get_int64();
+  int use_sample_priority =
+      (int)client_conf.get("use_sample_priority").get_int64();
   assert(machine_id >= 0 && machine_id < machine_num);
 
   /* Start working */
@@ -116,6 +121,9 @@ void Handler::GenThreads(std::string bench_name) {
     param_arr[i].global_rdma_region = global_rdma_region;
     param_arr[i].thread_num_per_machine = thread_num_per_machine;
     param_arr[i].total_thread_num = thread_num_per_machine * machine_num;
+    param_arr[i].sla_timeout = sla_timeout;
+    param_arr[i].use_priority = use_priority;
+    param_arr[i].use_sample_priority = use_sample_priority;
     thread_arr[i] = std::thread(run_thread, &param_arr[i], tatp_client,
                                 smallbank_client, tpcc_client);
 
@@ -163,7 +171,8 @@ void Handler::OutputResult(std::string bench_name, std::string system_name) {
   of_abort_rate.open(abort_rate_file.c_str(), std::ios::app);
 
   of_detail << system_name << std::endl;
-  of_detail << "tid attemp_tp tp 50lat 99lat avg_lat sla" << std::endl;
+  of_detail << "tid attemp_tp tp 50lat 99lat avglat sla_rate commit val_fail"
+            << std::endl;
 
   of_abort_rate << system_name << " tx_type try_num commit_num abort_rate"
                 << std::endl;
@@ -173,18 +182,32 @@ void Handler::OutputResult(std::string bench_name, std::string system_name) {
   double total_median = 0;
   double total_tail = 0;
   double total_avg = 0;
-  int total_sla = 0;
+  double total_sla = 0;
+  int total_commit = 0;
+  int total_val_fail = 0;
+  // micro
+  double total_sample_tail = 0;
+  double total_sample_avg = 0;
+  int total_sample_commit = 0;
 
   for (int i = 0; i < tid_vec.size(); i++) {
     of_detail << tid_vec[i] << " " << attemp_tp_vec[i] << " " << tp_vec[i]
               << " " << medianlat_vec[i] << " " << taillat_vec[i] << " "
-              << avglat_vec[i] << " " << sla_vec[i] << std::endl;
+              << avglat_vec[i] << " " << sla_vec[i] * 1.0 / commit_vec[i] << " "
+              << commit_vec[i] << " " << val_fail_vec[i] << std::endl;
     total_attemp_tp += attemp_tp_vec[i];
     total_tp += tp_vec[i];
     total_median += medianlat_vec[i];
     total_tail += taillat_vec[i];
     total_avg += avglat_vec[i];
     total_sla += sla_vec[i];
+    total_commit += commit_vec[i];
+    total_val_fail += val_fail_vec[i];
+    if (bench_name == "MICRO") {
+      total_sample_tail += sample_taillat_vec[i];
+      total_sample_avg += sample_avglat_vec[i];
+      total_sample_commit += sample_commit_vec[i];
+    }
   }
 
   size_t thread_num = tid_vec.size();
@@ -192,19 +215,52 @@ void Handler::OutputResult(std::string bench_name, std::string system_name) {
   double avg_median = total_median / thread_num;
   double avg_tail = total_tail / thread_num;
   double avg_avglat = total_avg / thread_num;
-  int avg_sla = total_sla / thread_num;
+  double sla_rate = total_sla / total_commit;
+  double avg_sample_taillat = 0;
+  double avg_sample_avglat = 0;
+  if (bench_name == "MICRO") {
+    avg_sample_taillat = total_sample_tail / thread_num;
+    avg_sample_avglat = total_sample_avg / thread_num;
+  }
 
   std::sort(medianlat_vec.begin(), medianlat_vec.end());
   std::sort(taillat_vec.begin(), taillat_vec.end());
 
-  of_detail << total_attemp_tp << " " << total_tp << " " << medianlat_vec[0]
-            << " " << medianlat_vec[thread_num - 1] << " " << avg_median << " "
-            << taillat_vec[0] << " " << taillat_vec[thread_num - 1] << " "
-            << avg_tail << " " << avg_avglat << " " << avg_sla << std::endl;
+  if (bench_name == "MICRO") {
+    of_detail << "total_attemp_tp=" << total_attemp_tp / 1000
+              << " total_tp=" << total_tp / 1000
+              << " first_50lat=" << medianlat_vec[0]
+              << " last_50lat=" << medianlat_vec[thread_num - 1]
+              << " avg_50lat=" << avg_median
+              << " first_99lat=" << taillat_vec[0]
+              << " last_99lat=" << taillat_vec[thread_num - 1]
+              << " avg_99lat=" << avg_tail << " avg_avglat=" << avg_avglat
+              << " sla_rate=" << sla_rate << " total_commit=" << total_commit
+              << " total_val_fail=" << total_val_fail
+              << " avg_sample_99lat=" << avg_sample_taillat
+              << " avg_sample_avglat=" << avg_sample_avglat
+              << " total_sample_commit=" << total_sample_commit << std::endl;
 
-  of << system_name << " " << total_attemp_tp / 1000 << " " << total_tp / 1000
-     << " " << avg_median << " " << avg_tail << " " << avg_avglat << " "
-     << avg_sla << std::endl;
+    of << system_name << " " << total_attemp_tp / 1000 << " " << total_tp / 1000
+       << " " << avg_median << " " << avg_tail << " " << avg_avglat << " "
+       << sla_rate << " " << total_commit << " " << total_val_fail << " "
+       << avg_sample_taillat << " " << avg_sample_avglat << " "
+       << total_sample_commit << std::endl;
+  } else {
+    of_detail << "total_attemp_tp=" << total_attemp_tp
+              << " total_tp=" << total_tp << " first_50lat=" << medianlat_vec[0]
+              << " last_50lat=" << medianlat_vec[thread_num - 1]
+              << " avg_50lat=" << avg_median
+              << " first_99lat=" << taillat_vec[0]
+              << " last_99lat=" << taillat_vec[thread_num - 1]
+              << " avg_99lat=" << avg_tail << " avg_avglat=" << avg_avglat
+              << " sla_rate=" << sla_rate << " total_commit=" << total_commit
+              << " total_val_fail=" << total_val_fail << std::endl;
+
+    of << system_name << " " << total_attemp_tp / 1000 << " " << total_tp / 1000
+       << " " << avg_median << " " << avg_tail << " " << avg_avglat << " "
+       << sla_rate << " " << total_commit << " " << total_val_fail << std::endl;
+  }
 
   if (bench_name == "tatp") {
     for (int i = 0; i < TATP_TX_TYPES; i++) {
@@ -239,10 +295,22 @@ void Handler::OutputResult(std::string bench_name, std::string system_name) {
   of_detail.close();
   of_abort_rate.close();
 
-  std::cerr << system_name << " " << total_attemp_tp / 1000 << " "
-            << total_tp / 1000 << " "
-            << " " << avg_median << " " << avg_tail << " " << avg_avglat << " "
-            << avg_sla << std::endl;
+  if (bench_name == "MICRO") {
+    std::cerr << system_name << " attemp_tp=" << total_attemp_tp / 1000
+              << " tp=" << total_tp / 1000 << " 50lat=" << avg_median
+              << " 99lat=" << avg_tail << " avglat=" << avg_avglat
+              << " sla_rate=" << sla_rate << " commit=" << total_commit
+              << " val_fail=" << total_val_fail
+              << " sample_99lat=" << avg_sample_taillat
+              << " sample_avglat=" << avg_sample_avglat
+              << " sample_commit=" << total_sample_commit << std::endl;
+  } else {
+    std::cerr << system_name << " attemp_tp=" << total_attemp_tp / 1000
+              << " tp=" << total_tp / 1000 << " 50lat=" << avg_median
+              << " 99lat=" << avg_tail << " avglat=" << avg_avglat
+              << " sla_rate=" << sla_rate << " commit=" << total_commit
+              << " val_fail=" << total_val_fail << std::endl;
+  }
 
   // Open it when testing the duration
 #if LOCK_WAIT
@@ -297,6 +365,10 @@ void Handler::GenThreadsForMICRO() {
       (t_id_t)client_conf.get("thread_num_per_machine").get_int64();
   lock_durations.resize(thread_num_per_machine);
   const int coro_num = (int)client_conf.get("coroutine_num").get_int64();
+  int sla_timeout = (int)client_conf.get("sla_timeout").get_int64();
+  int use_priority = (int)client_conf.get("use_priority").get_int64();
+  int use_sample_priority =
+      (int)client_conf.get("use_sample_priority").get_int64();
   assert(machine_id >= 0 && machine_id < machine_num);
 
   std::string thread_num_coro_num;
@@ -343,6 +415,9 @@ void Handler::GenThreadsForMICRO() {
     param_arr[i].thread_num_per_machine = thread_num_per_machine;
     param_arr[i].total_thread_num = thread_num_per_machine * machine_num;
     param_arr[i].bench_name = "micro";
+    param_arr[i].sla_timeout = sla_timeout;
+    param_arr[i].use_priority = use_priority;
+    param_arr[i].use_sample_priority = use_sample_priority;
     thread_arr[i] =
         std::thread(run_thread, &param_arr[i], nullptr, nullptr, nullptr);
 

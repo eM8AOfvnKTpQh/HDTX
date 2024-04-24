@@ -1,5 +1,4 @@
-// Author: Ming Zhang
-// Copyright (c) 2022
+ 
 
 #include "tatp/tatp_txn.h"
 

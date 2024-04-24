@@ -3,137 +3,214 @@
 
 /*-------------------------------------------------------------------------------------------*/
 
-bool DTX::CheckLockRW(std::vector<LockRead>& pending_lock_rw,
-                      std::vector<LockRead>& pending_locked_rw, char* cas_buf) {
+bool DTX::CheckCasRW(std::list<LockRead>& pending_lock_rw,
+                     std::list<HashRead>& pending_next_hash_rw,
+                     std::list<InsertOffRead>& pending_next_off_rw) {
+  for (auto& re : pending_lock_rw) {
+    if (*((lock_t*)re.lock_buf) != STATE_CLEAN) {
+      return false;
+    }
+
+    auto it = re.item->item_ptr;
+    auto* fetched_item = (DataItem*)(re.data_buf);
+    if (likely(fetched_item->key == it->key &&
+               fetched_item->table_id == it->table_id)) {
+      if (it->user_insert) {
+        // Insert or update (insert an exsiting key)
+        if (it->version < fetched_item->version) return false;
+        old_version_for_insert.push_back(
+            OldVersionForInsert{.table_id = it->table_id,
+                                .key = it->key,
+                                .version = fetched_item->version});
+      } else {
+        // Update or deletion
+        if (likely(fetched_item->valid)) {
+          if (tx_id < fetched_item->version) return false;
+          *it = *fetched_item;  // Get old data
+        } else {
+          // The item is deleted before, then update the local cache
+          addr_cache->Insert(re.primary_node_id, it->table_id, it->key,
+                             NOT_FOUND);
+          return false;
+        }
+      }
+      // The item must be visible because we can lock it
+      re.item->is_fetched = true;
+    } else {
+      // The cached address is stale
+
+      // 1. Release lock
+      *((lock_t*)re.lock_buf) = STATE_CLEAN;
+      if (!coro_sched->RDMAWrite(coro_id, re.qp, re.lock_buf,
+                                 it->GetRemoteLockAddr(), sizeof(lock_t)))
+        return false;
+
+      // TODO: Whether to reacquire lock
+
+      // 2. Read via hash
+      const HashMeta& meta =
+          global_meta_man->GetPrimaryHashMetaWithTableID(it->table_id);
+      uint64_t idx = MurmurHash64A(it->key, 0xdeadbeef) % meta.bucket_num;
+      offset_t node_off = idx * meta.node_size + meta.base_off;
+      auto* local_hash_node =
+          (HashNode*)thread_rdma_buffer_alloc->Alloc(sizeof(HashNode));
+      if (it->user_insert) {
+        pending_next_off_rw.emplace_back(
+            InsertOffRead{.qp = re.qp,
+                          .item = re.item,
+                          .buf = (char*)local_hash_node,
+                          .remote_node = re.primary_node_id,
+                          .meta = meta,
+                          .node_off = node_off});
+      } else {
+        pending_next_hash_rw.emplace_back(
+            HashRead{.qp = re.qp,
+                     .item = re.item,
+                     .buf = (char*)local_hash_node,
+                     .remote_node = re.primary_node_id,
+                     .meta = meta});
+      }
+      if (!coro_sched->RDMARead(coro_id, re.qp, (char*)local_hash_node,
+                                node_off, sizeof(HashNode)))
+        return false;
+    }
+  }
+  return true;
+}
+/*----------------------------------------------------------------------------------*/
+
+bool DTX::CheckLockRW(std::list<LockRead>& pending_lock_rw,
+                      std::list<LockRead>& pending_locked_rw, char* cas_buf) {
   for (auto iter = pending_lock_rw.begin(); iter != pending_lock_rw.end();) {
     auto& set_it = *iter;
     auto it = set_it.item->item_ptr;
-    if (global_meta_man->txn_system == DTX_SYS::FORD) {
-      if (*((lock_t*)set_it.lock_buf) != STATE_CLEAN) {
-        return false;
-      }
-    } else if (global_meta_man->txn_system == DTX_SYS::HDTX) {
 #if USE_CAS
-      if (*((lock_t*)set_it.lock_buf) != STATE_CLEAN) {
-        return false;
-      }
+    if (*((lock_t*)set_it.lock_buf) != STATE_CLEAN) {
+      return false;
+    }
 #else
-      struct priority_lock* lock = (struct priority_lock*)set_it.lock_buf;
-      bool high = (set_it.item->lock_mode == PRIORITY) ? true : false;
-      if (set_it.client_turn == -1) {  // init for the first time
-        set_it.client_turn =
-            high ? mask(lock->high_ticket_x) : lock->low_ticket_x;
-        // for checking lock
-        set_it.low_turn_x_first = lock->low_turn_x;
-        set_it.low_equals_first = (lock->low_turn_x == lock->low_ticket_x);
-        set_it.high_equals_first =
-            (lock->high_turn_x == mask(lock->high_ticket_x));
-        // for checking conflict
-        set_it.low_turn_x_old = lock->low_turn_x;
-        set_it.high_turn_x_old = lock->high_turn_x;
-      }
+    struct priority_lock* lock = (struct priority_lock*)set_it.lock_buf;
+    bool high = (set_it.item->lock_mode == PRIORITY) ? true : false;
+    if (set_it.client_turn == -1) {  // First initialization
+      set_it.client_turn =
+          high ? mask(lock->high_ticket_x) : lock->low_ticket_x;
+      // Used to check lock state
+      set_it.low_turn_x_first = lock->low_turn_x;
+      set_it.low_equals_first = (lock->low_turn_x == lock->low_ticket_x);
+      set_it.high_equals_first =
+          (lock->high_turn_x == mask(lock->high_ticket_x));
+      // Used to check conflict
+      set_it.low_turn_x_old = lock->low_turn_x;
+      set_it.high_turn_x_old = lock->high_turn_x;
+    }
 
-      // RDMA_LOG(INFO) << "key: " << set_it.item->item_ptr->key
-      //                << " lock: " << lock->low_turn_x << ' '
-      //                << lock->low_ticket_x << ' ' << lock->high_turn_x << ' '
-      //                << lock->high_ticket_x << " addr: "
-      //                << set_it.qp->remote_mr_.buf + it->GetRemoteLockAddr()
-      //                << " tx_id: " << tx_id;
+    // RDMA_LOG(INFO) << "key: " << set_it.item->item_ptr->key
+    //                << " lock: " << lock->low_turn_x << ' '
+    //                << lock->low_ticket_x << ' ' << lock->high_turn_x << ' '
+    //                << lock->high_ticket_x << " addr: "
+    //                << set_it.qp->remote_mr_.buf + it->GetRemoteLockAddr()
+    //                << " tx_id: " << tx_id;
 
-      if (!checkLock(set_it)) {  // check whether the lock has been acquired
-        if (!checkValid(set_it)) {
-          // reset
-          uint64_t compare = *((uint64_t*)set_it.lock_buf);
-          uint64_t swap = getResetVal(set_it);
-          if (!coro_sched->RDMACAS(coro_id, set_it.qp, cas_buf,
-                                   it->GetRemoteLockAddr(), compare, swap)) {
-            return false;
-          }
-        } else if (checkReacquire(set_it)) {  // check whether to reacquire
-          // RDMA_LOG(WARNING) << "reacquire lock.";
-#if USE_PRIORITY
-          uint64_t add_value = HIGH_TICKET_X_ADD;
-          set_it.item->lock_mode = PRIORITY;
-#else
-          uint64_t add_value = LOW_TICKET_X_ADD;
-          set_it.item->lock_mode = NORMAL;
-#endif
-          //  reset
-          gettimeofday(&set_it.start_time, nullptr);
-          set_it.client_turn = -1;
-
-          if (!coro_sched->RDMAFAA(coro_id, set_it.qp, set_it.lock_buf,
-                                   it->GetRemoteLockAddr(), add_value)) {
-            return false;
-          }
-          iter++;
-          continue;
-        }
-        if (checkConflict(set_it, 2 * LEASE_TIME)) {  // 20ms
-          // handle conflict
-          // RDMA_LOG(WARNING) << "lock conflict.";
-          // cas
-          uint64_t compare = *((uint64_t*)set_it.lock_buf);
-          uint64_t swap = getResetVal(set_it);
-
-          // RDMA_LOG(INFO) << "cas"
-          //                << " key: " << set_it.item->item_ptr->key;
-          if (!coro_sched->RDMACAS(coro_id, set_it.qp, cas_buf,
-                                   it->GetRemoteLockAddr(), compare, swap)) {
-            return false;
-          }
-
-          // RDMA_LOG(INFO) << "key: " << set_it.item->item_ptr->key
-          //                << " lock: " << lock->low_turn_x << ' '
-          //                << lock->low_ticket_x << ' ' << lock->high_turn_x
-          //                << ' ' << lock->high_ticket_x
-          //                << " addr: " << it->GetRemoteLockAddr()
-          //                << " client_turn: " << set_it.client_turn
-          //                << " tx_id: " << tx_id;
-
-          for (auto& lock_it : pending_locked_rw) {
-            // RDMA_LOG(INFO)
-            //     << "release, key: " << lock_it.item->item_ptr->key
-            //     << " addr: " <<
-            //     lock_it.item->item_ptr->GetRemoteLockAddr();
-
-            uint64_t add_value = (lock_it.item->lock_mode == PRIORITY)
-                                     ? HIGH_TURN_X_ADD
-                                     : LOW_TURN_X_ADD;
-            if (!coro_sched->RDMAFAA(
-                    coro_id, lock_it.qp, lock_it.lock_buf,
-                    lock_it.item->item_ptr->GetRemoteLockAddr(), add_value)) {
-              return false;
-            }
-          }
-          // abort
+    if (!checkLock(set_it)) {     // Check if the lock has been acquired
+      if (!checkValid(set_it)) {  // If lock state is invalid, try to reset it
+        // reset
+        uint64_t compare = *((uint64_t*)set_it.lock_buf);
+        uint64_t swap = getValidVal(set_it);
+        if (!coro_sched->RDMACAS(coro_id, set_it.qp, cas_buf,
+                                 it->GetRemoteLockAddr(), compare, swap)) {
           return false;
         }
-        // re-read
-        if (!coro_sched->RDMARead(coro_id, set_it.qp, set_it.lock_buf,
-                                  it->GetRemoteLockAddr(), sizeof(lock_t))) {
+      } else if (checkReacquire(set_it)) {  // Check whether the lock needs to
+                                            // be reacquired.
+        // RDMA_LOG(WARNING) << "Reacquire lock.";
+        uint64_t add_value;
+        if (set_it.item->lock_mode == PRIORITY) {
+          add_value = HIGH_TICKET_X_ADD;
+        } else {
+          add_value = LOW_TICKET_X_ADD;
+          set_it.item->lock_mode = NORMAL;
+        }
+
+        // Reset time and client_turn.
+        gettimeofday(&set_it.start_time, nullptr);
+        set_it.client_turn = -1;
+        // Re-read data
+        set_it.re_read = true;
+
+        if (!coro_sched->RDMAFAA(coro_id, set_it.qp, set_it.lock_buf,
+                                 it->GetRemoteLockAddr(), add_value)) {
           return false;
         }
         iter++;
         continue;
       }
-#endif
-    }
+      if (checkConflict(set_it, 2 * LEASE_TIME)) {  // If a conflict occurs, try
+                                                    // to reset lock state.
+        // RDMA_LOG(WARNING) << "Lock conflict.";
 
-    // lock successfully
-    pending_locked_rw.emplace_back(set_it);
-    iter = pending_lock_rw.erase(iter);  // point to next item
+        uint64_t compare = *((uint64_t*)set_it.lock_buf);
+        uint64_t swap = getResetVal(set_it);
+
+        // RDMA_LOG(INFO) << "cas"
+        //                << " key: " << set_it.item->item_ptr->key;
+        if (!coro_sched->RDMACAS(coro_id, set_it.qp, cas_buf,
+                                 it->GetRemoteLockAddr(), compare, swap)) {
+          return false;
+        }
+
+        // RDMA_LOG(INFO) << "key: " << set_it.item->item_ptr->key
+        //                << " lock: " << lock->low_turn_x << ' '
+        //                << lock->low_ticket_x << ' ' << lock->high_turn_x
+        //                << ' ' << lock->high_ticket_x
+        //                << " addr: " << it->GetRemoteLockAddr()
+        //                << " client_turn: " << set_it.client_turn
+        //                << " tx_id: " << tx_id;
+
+        // Release the lock held by the transaction.
+        for (auto& lock_it : pending_locked_rw) {
+          // RDMA_LOG(INFO)
+          //     << "release, key: " << lock_it.item->item_ptr->key
+          //     << " addr: " <<
+          //     lock_it.item->item_ptr->GetRemoteLockAddr();
+
+          uint64_t add_value = (lock_it.item->lock_mode == PRIORITY)
+                                   ? HIGH_TURN_X_ADD
+                                   : LOW_TURN_X_ADD;
+          if (!coro_sched->RDMAFAA(coro_id, lock_it.qp, lock_it.lock_buf,
+                                   lock_it.item->item_ptr->GetRemoteLockAddr(),
+                                   add_value)) {
+            return false;
+          }
+        }
+        // Abort the transaction.
+        return false;
+      }
+      // Re-read data
+      set_it.re_read = true;
+      // Re-read lock
+      if (!coro_sched->RDMARead(coro_id, set_it.qp, set_it.lock_buf,
+                                it->GetRemoteLockAddr(), sizeof(lock_t))) {
+        return false;
+      }
+
+      iter++;
+      continue;
+    }
+#endif
+
+    pending_locked_rw.emplace_back(set_it);  // Lock successfully.
+    iter = pending_lock_rw.erase(iter);      // Point to next item.
   }
 
   for (auto iter = not_locked_rw_set.begin();
        iter != not_locked_rw_set.end();) {
     auto index = *iter;
     auto& set_it = read_write_set[index];
-    if (!set_it.is_fetched) {  // if not fetched
+    if (!set_it.is_fetched) {
       iter++;
       continue;
     }
-    // if fetched, get the lock
+    // If fetched, try to get the lock.
     char* lock_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
     char* data_buf = thread_rdma_buffer_alloc->Alloc(DataItemSize);
     auto it = set_it.item_ptr;
@@ -149,7 +226,8 @@ bool DTX::CheckLockRW(std::vector<LockRead>& pending_lock_rw,
                  .data_buf = data_buf,
                  .primary_node_id = set_it.read_which_node,
                  .start_time = start_time,
-                 .client_turn = -1});
+                 .client_turn = -1,
+                 .re_read = false});
 
     std::shared_ptr<LockReadBatch> doorbell = std::make_shared<LockReadBatch>();
     LockType type;
@@ -159,7 +237,7 @@ bool DTX::CheckLockRW(std::vector<LockRead>& pending_lock_rw,
     locked_rw_set.emplace_back(index);
     type = CAS;
     compare_add = STATE_CLEAN;
-    swap = encode_id(t_id, coro_id);
+    swap = u_id;
 #else
     type = FAA;
     compare_add =
@@ -173,60 +251,71 @@ bool DTX::CheckLockRW(std::vector<LockRead>& pending_lock_rw,
     if (!doorbell->SendReqs(coro_sched, qp, coro_id)) {
       return false;
     }
-    iter = not_locked_rw_set.erase(iter);  // point to next item
+    iter = not_locked_rw_set.erase(iter);  // Point to next item.
   }
 
   return true;
 }
 
-bool DTX::CheckValidRW(std::vector<LockRead>& pending_locked_rw) {
+bool DTX::CheckValidRW(std::list<LockRead>& pending_locked_rw) {
 #if !USE_CAS
   for (auto& set_it : pending_locked_rw) {
     locked_rw_set.emplace_back(set_it.index);
   }
+
+  // for (auto& set_it : pending_locked_rw) {
+  //   struct timeval end_time;
+  //   gettimeofday(&end_time, nullptr);
+  //   uint64_t diff = (end_time.tv_sec - set_it.start_time.tv_sec) * 1000000 +
+  //                   (end_time.tv_usec - set_it.start_time.tv_usec);
+  //   if (diff > LEASE_TIME) {
+  //     return false;
+  //   }
+  // }
 #endif
 
-  // check valid
+  // Check valid
   for (auto& set_it : pending_locked_rw) {
     auto* fetched_item = (DataItem*)(set_it.data_buf);
     auto it = set_it.item->item_ptr;
     if (likely(fetched_item->key == it->key &&
                fetched_item->table_id == it->table_id)) {
-      if (it->user_insert) {
-        // insert or update (insert an exsiting key)
+      if (it->user_insert) {  // Insert or update (insert an exsiting key)
+        // TODO: Whether to compare version here
         // if (it->version < fetched_item->version) return false;
+
+        // Used to compare version during validate phase for insertion
         old_version_for_insert.push_back(
             OldVersionForInsert{.table_id = it->table_id,
                                 .key = it->key,
                                 .version = fetched_item->version});
       } else {
         // RDMA_LOG(WARNING) << "Update or deletion";
-        //  Update or deletion
+
         if (likely(fetched_item->valid)) {
           // if (tx_id < fetched_item->version) {
-          //   // RDMA_LOG(ERROR) << "fail";
+          //   // RDMA_LOG(ERROR) << "Version is too old.";
           //   return false;
           // }
-          *it = *fetched_item;  // update
+          *it = *fetched_item;  // Update item
         } else {
+          // RDMA_LOG(ERROR) << "The item is deleted before.";
+
           // The item is deleted before, then update the local cache
           addr_cache->Insert(set_it.primary_node_id, it->table_id, it->key,
                              NOT_FOUND);
-          // RDMA_LOG(ERROR) << "fail";
           return false;
         }
       }
       // The item must be visible because we can lock it
       set_it.item->is_fetched = true;
-    } else {
-      // RDMA_LOG(ERROR) << "read error";
+    } else {  // It's unlikely to happen
+      // RDMA_LOG(ERROR) << "The cached address is stale";
       return false;
     }
   }
   return true;
 }
-
-/*----------------------------------------------------------------------------------*/
 
 int DTX::FindMatchSlot(HashRead& res,
                        std::list<InvisibleRead>& pending_invisible_ro) {
@@ -247,7 +336,7 @@ int DTX::FindMatchSlot(HashRead& res,
   }
   if (likely(find)) {
 #if LOCK_REFUSE_READ_RW
-    if (it->lock == encode_id(t_id, coro_id)) return SLOT_LOCKED;
+    if (it->lock == u_id) return SLOT_LOCKED;
 #else
     if (unlikely((it->lock & STATE_INVISIBLE))) {
 #if INV_ABORT
@@ -256,18 +345,15 @@ int DTX::FindMatchSlot(HashRead& res,
       // This item is invisible, we need re-read
       char* cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
       uint64_t lock_offset = it->GetRemoteLockAddr(it->remote_offset);
-      // RDMA_LOG(WARNING) << std::hex << it->lock;
       pending_invisible_ro.emplace_back(
           InvisibleRead{.qp = res.qp, .buf = cas_buf, .off = lock_offset});
       if (!coro_sched->RDMARead(coro_id, res.qp, cas_buf, lock_offset,
-                                sizeof(lock_t))) {
+                                sizeof(lock_t)))
         return SLOT_NOT_FOUND;
-      }
     }
 #endif
     return SLOT_FOUND;
   }
-
   return SLOT_NOT_FOUND;
 }
 
@@ -280,8 +366,6 @@ bool DTX::CheckHashRW(std::vector<HashRead>& pending_hash_rw,
     if (rc == SLOT_NOT_FOUND) {
       auto* local_hash_node = (HashNode*)res.buf;
       if (local_hash_node->next == nullptr) {
-        // RDMA_LOG(WARNING) << "hash node nullptr, key: " <<
-        // res.item->item_ptr->key;
         tx_error = TXError::ITEM_NOT_FOUND;
         return false;
       }
@@ -296,8 +380,7 @@ bool DTX::CheckHashRW(std::vector<HashRead>& pending_hash_rw,
       if (!coro_sched->RDMARead(coro_id, res.qp, res.buf, node_off,
                                 sizeof(HashNode)))
         return false;
-    } else if (rc == VERSION_TOO_OLD || rc == SLOT_LOCKED || rc == SLOT_INV) {
-      // RDMA_LOG(ERROR) << rc;
+    } else if (rc == VERSION_TOO_OLD || rc == SLOT_INV || rc == SLOT_LOCKED) {
       return false;
     }
   }
@@ -326,8 +409,7 @@ bool DTX::CheckNextHashRW(std::list<InvisibleRead>& pending_invisible_ro,
                                 sizeof(HashNode)))
         return false;
       iter++;
-    } else if (rc == VERSION_TOO_OLD || rc == SLOT_LOCKED || rc == SLOT_INV) {
-      // RDMA_LOG(ERROR) << rc;
+    } else if (rc == VERSION_TOO_OLD || rc == SLOT_INV || rc == SLOT_LOCKED) {
       return false;
     }
   }
@@ -377,7 +459,7 @@ int DTX::FindInsertOff(InsertOffRead& res,
     // Therefore, during recovery, if there is no old backups for some data in
     // remote memory pool, it indicates that this is caused by an insertion.
 #if LOCK_REFUSE_READ_RW
-    if (it->lock == encode_id(t_id, coro_id)) return SLOT_LOCKED;
+    if (it->lock == u_id) return SLOT_LOCKED;
     it->remote_offset = possible_insert_position;
     old_version_for_insert.push_back(OldVersionForInsert{
         .table_id = it->table_id, .key = it->key, .version = old_version});
@@ -395,9 +477,8 @@ int DTX::FindInsertOff(InsertOffRead& res,
       pending_invisible_ro.emplace_back(
           InvisibleRead{.qp = res.qp, .buf = cas_buf, .off = lock_offset});
       if (!coro_sched->RDMARead(coro_id, res.qp, cas_buf, lock_offset,
-                                sizeof(lock_t))) {
+                                sizeof(lock_t)))
         return OFFSET_NOT_FOUND;
-      }
     }
 #endif
     res.item->is_fetched = true;

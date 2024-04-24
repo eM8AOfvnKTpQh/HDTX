@@ -1,5 +1,4 @@
-# Author: Ming Zhang
-# Copyright (c) 2022
+ 
 
 set(DB_SOURCES smallbank_db.cc)
 set(TXN_SOURCES smallbank_txn.cc)

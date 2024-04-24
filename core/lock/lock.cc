@@ -1,5 +1,7 @@
 #include "lock.h"
 
+#define NEXT_ONE 1
+
 bool checkLock(LockRead &re) {
   struct priority_lock *lock = (struct priority_lock *)re.lock_buf;
   bool high = (re.item->lock_mode == PRIORITY) ? true : false;
@@ -8,7 +10,6 @@ bool checkLock(LockRead &re) {
   bool low_equals_first = re.low_equals_first;
   bool high_equals_first = re.high_equals_first;
 
-  // check whether get the lock
   if (high) {
     bool ret = (client_turn == lock->high_turn_x);
     if (low_equals_first) return ret;
@@ -24,7 +25,6 @@ bool checkLock(LockRead &re) {
 bool checkValid(LockRead &re) {
   struct priority_lock *lock = (struct priority_lock *)re.lock_buf;
 
-  // check valid
   if (lock->low_turn_x > lock->low_ticket_x ||
       lock->high_turn_x > mask(lock->high_ticket_x)) {
     // RDMA_LOG(ERROR) << "lock invalid: " << lock->low_turn_x << ' '
@@ -43,7 +43,7 @@ bool checkReacquire(LockRead &re) {
   return client_turn < server_turn;
 }
 
-// check failures and deadlocks
+// Check failures and deadlocks
 bool checkConflict(LockRead &re, int64_t timeout) {
   struct timeval end_time;
   gettimeofday(&end_time, nullptr);
@@ -64,18 +64,30 @@ uint64_t getValidVal(LockRead &re) {
     swap_ptr->high_turn_x = mask(swap_ptr->high_ticket_x);
   }
 
-  // set visable
+  // Set visable
   swap_ptr->high_ticket_x = mask(swap_ptr->high_ticket_x);
+
+  return swap;
 }
 
 uint64_t getResetVal(LockRead &re) {
   uint64_t swap = *((uint64_t *)re.lock_buf);
   struct priority_lock *swap_ptr = (struct priority_lock *)&swap;
 
+#if NEXT_ONE
+  if (re.item->lock_mode == PRIORITY) {
+    swap_ptr->high_turn_x = re.client_turn + 1;
+    swap_ptr->low_turn_x = swap_ptr->low_turn_x + 1;
+  } else {
+    swap_ptr->low_turn_x = re.client_turn + 1;
+    swap_ptr->high_turn_x = swap_ptr->high_turn_x + 1;
+  }
+#else
   swap_ptr->low_turn_x = swap_ptr->low_ticket_x;
   swap_ptr->high_turn_x = mask(swap_ptr->high_ticket_x);
+#endif
 
-  // set visable
+  // Set visable
   swap_ptr->high_ticket_x = mask(swap_ptr->high_ticket_x);
 
   // RDMA_LOG(INFO) << "swap: " << swap_ptr->low_turn_x << ' '

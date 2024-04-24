@@ -10,14 +10,8 @@ MetaManager::MetaManager() {
   local_machine_id = (node_id_t)local_node.get("machine_id").get_int64();
   txn_system = local_node.get("txn_system").get_int64();
   RDMA_LOG(INFO) << "Run "
-                 << (txn_system == 0
-                         ? "FaRM"
-                         : (txn_system == 1
-                                ? "DrTM+H"
-                                : (txn_system == 2
-                                       ? "FORD"
-                                       : (txn_system == 3 ? "FORD-LOCAL"
-                                                          : "HDTX"))));
+                 << (txn_system == 0 ? "FaRM"
+                                     : (txn_system == 1 ? "FORD" : "HDTX"));
 
   auto pm_nodes = json_config.get("remote_pm_nodes");
   auto remote_ips = pm_nodes.get("remote_ips");  // Array
@@ -30,7 +24,7 @@ MetaManager::MetaManager() {
   for (size_t index = 0; index < remote_ips.size(); index++) {
     std::string remote_ip = remote_ips.get(index).get_str();
     int remote_meta_port = (int)remote_meta_ports.get(index).get_int64();
-    RDMA_LOG(INFO) << "get hash meta from " << remote_ip;
+    // RDMA_LOG(INFO) << "get hash meta from " << remote_ip;
     node_id_t remote_machine_id = GetMemStoreMeta(remote_ip, remote_meta_port);
     if (remote_machine_id == -1) {
       std::cerr << "Thread " << std::this_thread::get_id()
@@ -85,7 +79,6 @@ node_id_t MetaManager::GetMemStoreMeta(std::string& remote_ip,
   }
   if (connect(client_socket, (struct sockaddr*)&server_addr,
               sizeof(server_addr)) < 0) {
-    RDMA_LOG(ERROR) << remote_ip << " " << remote_port;
     RDMA_LOG(ERROR) << "MetaManager connect error: " << strerror(errno);
     close(client_socket);
     return -1;

@@ -25,7 +25,6 @@ void CoroutineScheduler::PollRegularCompletion() {
         continue;
       }
     }
-
     auto coro_id = wc.wr_id;
     if (coro_id == 0) continue;
     assert(pending_counts[coro_id] > 0);

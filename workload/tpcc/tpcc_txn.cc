@@ -1,5 +1,4 @@
-// Author: Ming Zhang, Lurong Liu
-// Copyright (c) 2022
+ 
 
 #include "tpcc/tpcc_txn.h"
 

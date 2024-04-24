@@ -3,6 +3,6 @@
     "num_accounts": 100000,
     "num_hot_accounts": 4000,
     "attempted_num": 100000,
-    "wait_time": 1000
+	"wait_time":1000
   }
 }

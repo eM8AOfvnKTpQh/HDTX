@@ -9,13 +9,13 @@
 
 const size_t MAX_ITEM_SIZE = 670; // 670 for lock address aligned
 
-/*********************** For ELOCK **********************/
+/*********************** For HDTX **********************/
 #define USE_CAS 0
 #define USE_CPU 1
 #define USE_PRIORITY 1
 #define USE_BATCH 1
 #define USE_VALIDATE_COMMIT 1
-#define LEASE_TIME 300
+#define LEASE_TIME 1000 // micro: 500 tatp: 1000 smallbank: 1200 tpcc:2500
 
 /*********************** For FORD **********************/
 // 0: Read rw data without lock
@@ -24,7 +24,7 @@ const size_t MAX_ITEM_SIZE = 670; // 670 for lock address aligned
 
 // 0: Seperately commit remote replicas
 // 1: Coalescently commit remote replicas
-#define COMMIT_TOGETHER 0
+#define COMMIT_TOGETHER 1
 
 // 0: Disable reading read-only data from backups
 // 1: Enable reading read-only data from backups
@@ -71,7 +71,7 @@ const size_t MAX_ITEM_SIZE = 670; // 670 for lock address aligned
 
 /*********************** For counterparts **********************/
 // 0: Do not cache addrs in local. Default for FaRM
-// 1: Cache addrs in local. Default for DrTM+h, Optmized for FaRM
+// 1: Cache addrs in local. Optmized for FaRM
 #define USE_LOCAL_ADDR_CACHE 0
 
 // 1: Locks block reads

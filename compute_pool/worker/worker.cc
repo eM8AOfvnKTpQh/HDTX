@@ -5,6 +5,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <string>
 
@@ -18,6 +19,9 @@
 #include "tpcc/tpcc_txn.h"
 #include "util/latency.h"
 #include "util/zipf.h"
+
+#define WAIT 1
+#define STAT_ABORT 1
 
 using namespace std::placeholders;
 
@@ -34,6 +38,11 @@ extern std::vector<double> medianlat_vec;
 extern std::vector<double> taillat_vec;
 extern std::vector<double> avglat_vec;
 extern std::vector<int> sla_vec;
+extern std::vector<int> commit_vec;
+extern std::vector<int> val_fail_vec;
+extern std::vector<double> sample_taillat_vec;
+extern std::vector<double> sample_avglat_vec;
+extern std::vector<int> sample_commit_vec;
 
 extern std::vector<uint64_t> total_try_times;
 extern std::vector<uint64_t> total_commit_times;
@@ -41,6 +50,7 @@ extern std::vector<uint64_t> total_commit_times;
 __thread size_t ATTEMPTED_NUM;
 __thread uint64_t wait_time;
 __thread uint64_t seed;                        // Thread-global random seed
+__thread uint64_t lock_seed;                   // Random seed for lock
 __thread FastRandom* random_generator = NULL;  // Per coroutine random generator
 __thread t_id_t thread_gid;
 __thread t_id_t thread_local_id;
@@ -69,15 +79,22 @@ __thread CoroutineScheduler*
     coro_sched;  // Each transaction thread has a coroutine scheduler
 __thread bool stop_run;
 
+__thread int sla_timeout;
+__thread int use_priority;
+__thread int use_sample_priority;
+
 // Performance measurement (thread granularity)
 __thread struct timespec msr_start, msr_end;
 __thread double* timer;
 __thread uint64_t stat_attempted_tx_total = 0;  // Issued transaction number
 __thread uint64_t stat_committed_tx_total = 0;  // Committed transaction number
+__thread uint64_t stat_val_fail_total = 0;      // Validate fail number
 const coro_id_t POLL_ROUTINE_ID = 0;            // The poll coroutine ID
 
 // For MICRO benchmark
+std::vector<ZipfGen*> zipf_gens;
 __thread ZipfGen* zipf_gen = nullptr;
+__thread double zipf_theta;
 __thread bool is_skewed;
 __thread uint64_t data_set_size;
 __thread uint64_t num_keys_global;
@@ -112,7 +129,7 @@ void RecordTpLat(double msr_sec) {
   int sla = 0;
   for (int i = 0; i < stat_committed_tx_total; i++) {
     sum += timer[i];
-    if (timer[i] > 1400) sla++;
+    if (timer[i] > sla_timeout) sla++;
   }
   double average_latency = sum / stat_committed_tx_total;
 
@@ -124,6 +141,8 @@ void RecordTpLat(double msr_sec) {
   taillat_vec.push_back(percentile_99);
   avglat_vec.push_back(average_latency);
   sla_vec.push_back(sla);
+  commit_vec.push_back(stat_committed_tx_total);
+  val_fail_vec.push_back(stat_val_fail_total);
 
   for (size_t i = 0; i < total_try_times.size(); i++) {
     total_try_times[i] += thread_local_try_times[i];
@@ -144,6 +163,8 @@ void RunTATP(coro_yield_t& yield, coro_id_t coro_id) {
   uint64_t tx_id;      // global atomic transaction id
   TATPTxType tx_type;  // transaction type
   int tx_committed = 0;
+  long acc_time = 0;
+  int commit = 0;
 
   // Running transactions
   clock_gettime(CLOCK_REALTIME, &msr_start);
@@ -151,7 +172,7 @@ void RunTATP(coro_yield_t& yield, coro_id_t coro_id) {
     // Guarantee that each coroutine has a different seed
     tx_type = tatp_workgen_arr[FastRand(&seed) % 100];
     stat_attempted_tx_total++;
-    dtx->lock_mode = NORMAL;
+    if (acc_time == 0) dtx->lock_mode = NORMAL;
     clock_gettime(CLOCK_REALTIME, &tx_start_time);
     while (true) {
       tx_id = ++tx_id_generator;
@@ -207,17 +228,28 @@ void RunTATP(coro_yield_t& yield, coro_id_t coro_id) {
           printf("Unexpected transaction type %d\n", static_cast<int>(tx_type));
           abort();
       }
-      if (tx_committed) break;
-      if (dtx->tx_error == ITEM_NOT_FOUND) break;  // don't record
+      if (tx_committed) {
+        commit = 1;
+        break;
+      }
+      if (dtx->tx_status == TXStatus::TX_VAL) {
+        stat_val_fail_total++;
+        // RDMA_LOG(INFO) << dtx->tx_error;
+      }
+      if (dtx->tx_error == ITEM_NOT_FOUND) {
+        commit = 0;
+        break;
+      }  // don't record
       clock_gettime(CLOCK_REALTIME, &tx_end_time);
       double tx_usec =
           (tx_end_time.tv_sec - tx_start_time.tv_sec) * 1000000 +
           (double)(tx_end_time.tv_nsec - tx_start_time.tv_nsec) / 1000;
       if (tx_usec > wait_time) {
         tx_committed = 1;
+        commit = 0;
         break;
       }
-      dtx->lock_mode = PRIORITY;
+      if (use_priority && (rand() % 55 == 1)) dtx->lock_mode = PRIORITY;
     }
 
     /**************************** Stat begin ****************************/
@@ -228,18 +260,24 @@ void RunTATP(coro_yield_t& yield, coro_id_t coro_id) {
       double tx_usec =
           (tx_end_time.tv_sec - tx_start_time.tv_sec) * 1000000L +
           (double)(tx_end_time.tv_nsec - tx_start_time.tv_nsec) / 1000;
-      timer[stat_committed_tx_total++] = tx_usec;
-      tot_time += tx_usec;
+
+      acc_time += tx_usec;
+      if (commit == 1) {
+        timer[stat_committed_tx_total++] = acc_time;
+        acc_time = 0;
+      }
+
+      //  tot_time += tx_usec;  // Exclude the influence of non-existent keys
     }
     if (stat_attempted_tx_total >= ATTEMPTED_NUM) {
       // A coroutine calculate the total execution time and exits
       clock_gettime(CLOCK_REALTIME, &msr_end);
       // double msr_usec = (msr_end.tv_sec - msr_start.tv_sec) * 1000000 +
       // (double) (msr_end.tv_nsec - msr_start.tv_nsec) / 1000;
-      // double msr_sec =
-      //     (msr_end.tv_sec - msr_start.tv_sec) +
-      //     (double)(msr_end.tv_nsec - msr_start.tv_nsec) / 1000000000;
-      double msr_sec = (double)tot_time / 1000000;
+      double msr_sec =
+          (msr_end.tv_sec - msr_start.tv_sec) +
+          (double)(msr_end.tv_nsec - msr_start.tv_nsec) / 1000000000;
+      // double msr_sec = (double)tot_time / 1000000;
       RecordTpLat(msr_sec);
       break;
     }
@@ -258,13 +296,16 @@ void RunSmallBank(coro_yield_t& yield, coro_id_t coro_id) {
   uint64_t tx_id;           // global atomic transaction id
   SmallBankTxType tx_type;  // transaction type
   int tx_committed = 0;
+  char commit = 0;
+  long acc_time = 0;
 
+  int retry_count = 1;
   // Running transactions
   clock_gettime(CLOCK_REALTIME, &msr_start);
   while (true) {
     tx_type = smallbank_workgen_arr[FastRand(&seed) % 100];
     stat_attempted_tx_total++;
-    dtx->lock_mode = NORMAL;
+    if (acc_time == 0) dtx->lock_mode = NORMAL;
     clock_gettime(CLOCK_REALTIME, &tx_start_time);
     while (true) {
       tx_id = ++tx_id_generator;
@@ -315,28 +356,60 @@ void RunSmallBank(coro_yield_t& yield, coro_id_t coro_id) {
           abort();
       }
       // RDMA_LOG(INFO) << "try: " << (uint64_t)tx_type;
-      if (tx_committed) break;
-      if (dtx->tx_error == ITEM_NOT_FOUND) break;
+      if (tx_committed) {
+        commit = 1;
+        break;
+      }
+      if (dtx->tx_status == TXStatus::TX_VAL) {
+        stat_val_fail_total++;
+        // RDMA_LOG(INFO) << dtx->tx_error;
+      }
+      if (dtx->tx_error == ITEM_NOT_FOUND) {
+        commit = 0;
+        break;
+      }
       clock_gettime(CLOCK_REALTIME, &tx_end_time);
       double tx_usec =
           (tx_end_time.tv_sec - tx_start_time.tv_sec) * 1000000 +
           (double)(tx_end_time.tv_nsec - tx_start_time.tv_nsec) / 1000;
+
       if (tx_usec > wait_time) {
         tx_committed = 1;
+        commit = 0;
         break;
       }
-      dtx->lock_mode = PRIORITY;
+      if (use_priority && (rand() % 55 == 1)) dtx->lock_mode = PRIORITY;
+
+// #define new_one
+#ifdef new_one
+      if (retry_count < 500) retry_count = retry_count * 2;
+      if (tx_usec + retry_count > wait_time) {
+        tx_committed = 2;
+        break;
+      }
+      int back_off = rand() % retry_count;
+      usleep(back_off);
+#endif
     }
 
     /**************************** Stat begin ****************************/
     // Stat after one transaction finishes
     if (tx_committed) {
-      clock_gettime(CLOCK_REALTIME, &tx_end_time);
+#ifdef new_one
+      retry_count = 1;
+#endif
       // RDMA_LOG(INFO) << "commit: " << tx_id;
+      clock_gettime(CLOCK_REALTIME, &tx_end_time);
       double tx_usec =
           (tx_end_time.tv_sec - tx_start_time.tv_sec) * 1000000 +
           (double)(tx_end_time.tv_nsec - tx_start_time.tv_nsec) / 1000;
-      timer[stat_committed_tx_total++] = tx_usec;
+
+      acc_time += tx_usec;
+      if (commit == 1) {
+        timer[stat_committed_tx_total++] = acc_time;  // tx_usec;//acc_time;
+        acc_time = 0;
+      }
+      // timer[stat_committed_tx_total++] = tx_usec;
     }
     if (stat_attempted_tx_total >= ATTEMPTED_NUM) {
       // A coroutine calculate the total execution time and exits
@@ -365,14 +438,15 @@ void RunTPCC(coro_yield_t& yield, coro_id_t coro_id) {
   uint64_t tx_id;      // global atomic transaction id
   TPCCTxType tx_type;  // transaction type
   int tx_committed = 0;
-
+  long acc_time = 0;
+  int commit = 0;
   // Running transactions
   clock_gettime(CLOCK_REALTIME, &msr_start);
   while (true) {
     // Guarantee that each coroutine has a different seed
     tx_type = tpcc_workgen_arr[FastRand(&seed) % 100];
     stat_attempted_tx_total++;
-    dtx->lock_mode = NORMAL;
+    if (acc_time == 0) dtx->lock_mode = NORMAL;
     uint64_t last_seed = random_generator[coro_id].GetSeed();
 
     clock_gettime(CLOCK_REALTIME, &tx_start_time);
@@ -421,17 +495,29 @@ void RunTPCC(coro_yield_t& yield, coro_id_t coro_id) {
           printf("Unexpected transaction type %d\n", static_cast<int>(tx_type));
           abort();
       }
-      if (tx_committed) break;
-      if (dtx->tx_error == ITEM_NOT_FOUND) break;
+      if (tx_committed) {
+        commit = 1;
+        break;
+      }
+      // RDMA_LOG(INFO) << dtx->tx_status;
+      if (dtx->tx_status == TXStatus::TX_VAL) {
+        stat_val_fail_total++;
+        // RDMA_LOG(INFO) << dtx->tx_error;
+      }
+      if (dtx->tx_error == ITEM_NOT_FOUND) {
+        commit = 0;
+        break;
+      }
       clock_gettime(CLOCK_REALTIME, &tx_end_time);
       double tx_usec =
           (tx_end_time.tv_sec - tx_start_time.tv_sec) * 1000000 +
           (double)(tx_end_time.tv_nsec - tx_start_time.tv_nsec) / 1000;
       if (tx_usec > wait_time) {
         tx_committed = 1;
+        commit = 0;
         break;
       }
-      dtx->lock_mode = PRIORITY;
+      if (use_priority) dtx->lock_mode = PRIORITY;
     }
 
     /**************************** Stat begin ****************************/
@@ -442,8 +528,14 @@ void RunTPCC(coro_yield_t& yield, coro_id_t coro_id) {
       double tx_usec =
           (tx_end_time.tv_sec - tx_start_time.tv_sec) * 1000000L +
           (double)(tx_end_time.tv_nsec - tx_start_time.tv_nsec) / 1000;
-      timer[stat_committed_tx_total++] = tx_usec;
-      tot_time += tx_usec;
+
+      acc_time += tx_usec;
+      if (commit == 1) {
+        timer[stat_committed_tx_total++] = acc_time;
+        acc_time = 0;
+      }
+
+      // tot_time += tx_usec;  // Exclude the influence of non-existent keys
     }
     // RDMA_LOG(INFO) << "num: " << stat_attempted_tx_total;
     if (stat_attempted_tx_total >= ATTEMPTED_NUM) {
@@ -451,10 +543,10 @@ void RunTPCC(coro_yield_t& yield, coro_id_t coro_id) {
       clock_gettime(CLOCK_REALTIME, &msr_end);
       // double msr_usec = (msr_end.tv_sec - msr_start.tv_sec) * 1000000 +
       // (double) (msr_end.tv_nsec - msr_start.tv_nsec) / 1000;
-      // double msr_sec =
-      //     (msr_end.tv_sec - msr_start.tv_sec) +
-      //     (double)(msr_end.tv_nsec - msr_start.tv_nsec) / 1000000000L;
-      double msr_sec = (double)tot_time / 1000000;
+      double msr_sec =
+          (msr_end.tv_sec - msr_start.tv_sec) +
+          (double)(msr_end.tv_nsec - msr_start.tv_nsec) / 1000000000L;
+      // double msr_sec = (double)tot_time / 1000000;
       RecordTpLat(msr_sec);
       break;
     }
@@ -471,22 +563,50 @@ void RunMICRO(coro_yield_t& yield, coro_id_t coro_id) {
                      coro_sched, rdma_buffer_allocator, log_offset_allocator,
                      addr_cache);
   struct timespec tx_start_time, tx_end_time;
-  uint64_t tx_id;  // global atomic transaction id
-  bool tx_committed = false;
+  uint64_t tx_id;  // Global atomic transaction id
+  int tx_committed = 0;
+  char commit = 0;
+
+  bool is_sample = false;
+  int sample_count = 0;
+  double* sample_timer = new double[ATTEMPTED_NUM];
+
+  long acc_time = 0;
 
   // Running transactions
   clock_gettime(CLOCK_REALTIME, &msr_start);
   while (true) {
     stat_attempted_tx_total++;
-    dtx->lock_mode = NORMAL;
-    // prepare data set
+    if (acc_time == 0) {
+      if (FastRand(&lock_seed) % 100 < 80) {
+        is_sample = false;
+      } else {
+        is_sample = true;
+        if (use_sample_priority) {
+          dtx->lock_mode = PRIORITY;
+        } else {
+          dtx->lock_mode = NORMAL;
+        }
+      }
+    }
+    // Populate data set
     DataItemPtr micro_objs[data_set_size];
     std::set<uint64_t> uni_set;
-    for (uint64_t i = 0; i < data_set_size;) {
+    for (uint64_t i = 0; i < data_set_size; i++) {
       micro_key_t micro_key;
       if (is_skewed) {
         // Skewed distribution
+        // Random select a zipf_gen
+        // int index = FastRand(&seed) % zipf_gens.size();
+        // ZipfGen* gen = zipf_gens[index];
+        // micro_key.micro_id = (itemkey_t)(gen->next());
         micro_key.micro_id = (itemkey_t)(zipf_gen->next());
+
+        // micro_key.micro_id =
+        //     (micro_key.micro_id + num_keys_global / thread_num * thread_gid)
+        //     % num_keys_global;
+
+        // RDMA_LOG(INFO) << micro_key.micro_id;
       } else {
         // Uniformed distribution
         micro_key.micro_id = (itemkey_t)FastRand(&seed) & (num_keys_global - 1);
@@ -494,35 +614,53 @@ void RunMICRO(coro_yield_t& yield, coro_id_t coro_id) {
 
       assert(micro_key.item_key >= 0 && micro_key.item_key < num_keys_global);
 
-      if (uni_set.count(micro_key.item_key)) {
-        continue;
-      } else {
+      // if (uni_set.count(micro_key.item_key)) {
+      //   continue;
+      // } else {
+      //   uni_set.insert(micro_key.item_key);
+      // }
+
+      if (!uni_set.count(micro_key.item_key)) {
         uni_set.insert(micro_key.item_key);
+        micro_objs[uni_set.size() - 1] = std::make_shared<DataItem>(
+            (table_id_t)MicroTableType::kMicroTable, micro_key.item_key);
       }
-
-      micro_objs[i] = std::make_shared<DataItem>(
-          (table_id_t)MicroTableType::kMicroTable, micro_key.item_key);
-
-      i++;
     }
 
+    std::sort(micro_objs, micro_objs + uni_set.size());
+
     clock_gettime(CLOCK_REALTIME, &tx_start_time);
+#if WAIT
     while (true) {
       tx_id = ++tx_id_generator;
+      // RDMA_LOG(INFO) << "data size: " << uni_set.size();
       tx_committed = TxMicroTest(seed, yield, tx_id, dtx, micro_objs,
-                                 data_set_size, write_ratio);
+                                 uni_set.size(), write_ratio);
 
-      if (tx_committed) break;
+      if (tx_committed) {
+        commit = 1;
+        break;
+      }
+      if (dtx->tx_status == TXStatus::TX_VAL) stat_val_fail_total++;
       clock_gettime(CLOCK_REALTIME, &tx_end_time);
       double tx_usec =
           (tx_end_time.tv_sec - tx_start_time.tv_sec) * 1000000 +
           (double)(tx_end_time.tv_nsec - tx_start_time.tv_nsec) / 1000;
       if (tx_usec > wait_time) {
-        tx_committed = 1;
+        tx_committed = 2;
+        commit = 0;
+        // RDMA_LOG(INFO) << "break";
         break;
       }
-      dtx->lock_mode = PRIORITY;
+      // RDMA_LOG(INFO) << "Retry";
+      if (use_priority) dtx->lock_mode = PRIORITY;
     }
+#else
+    tx_id = ++tx_id_generator;
+    // RDMA_LOG(INFO) << "data size: " << uni_set.size();
+    tx_committed = TxMicroTest(seed, yield, tx_id, dtx, micro_objs,
+                               uni_set.size(), write_ratio);
+#endif
     /**************************** Stat begin ****************************/
     // Stat after one transaction finishes
     if (tx_committed) {
@@ -530,7 +668,24 @@ void RunMICRO(coro_yield_t& yield, coro_id_t coro_id) {
       double tx_usec =
           (tx_end_time.tv_sec - tx_start_time.tv_sec) * 1000000 +
           (double)(tx_end_time.tv_nsec - tx_start_time.tv_nsec) / 1000;
-      timer[stat_committed_tx_total++] = tx_usec;
+
+#if STAT_ABORT
+      acc_time += tx_usec;
+      if (tx_committed == 1) {
+        timer[stat_committed_tx_total++] = acc_time;
+        if (is_sample) {
+          sample_timer[sample_count++] = acc_time;
+        }
+        acc_time = 0;
+      }
+#else
+      if (tx_committed) {
+        timer[stat_committed_tx_total++] = tx_usec;
+        if (is_sample) {
+          sample_timer[sample_count++] = tx_usec;
+        }
+      }
+#endif
     }
     if (stat_attempted_tx_total >= ATTEMPTED_NUM) {
       // A coroutine calculate the total execution time and exits
@@ -568,9 +723,18 @@ void RunMICRO(coro_yield_t& yield, coro_id_t coro_id) {
       int sla = 0;
       for (int i = 0; i < stat_committed_tx_total; i++) {
         sum += timer[i];
-        if (timer[i] > 500) sla++;
+        if (timer[i] > sla_timeout) sla++;
       }
       double average_latency = sum / stat_committed_tx_total;
+
+      std::sort(sample_timer, sample_timer + sample_count);
+      double sample_tail_latency = sample_timer[sample_count * 99 / 100];
+
+      sum = 0;
+      for (int i = 0; i < sample_count; i++) {
+        sum += sample_timer[i];
+      }
+      double sample_avg_latency = sum / sample_count;
 
       mux.lock();
       tid_vec.push_back(thread_gid);
@@ -580,9 +744,15 @@ void RunMICRO(coro_yield_t& yield, coro_id_t coro_id) {
       taillat_vec.push_back(percentile_99);
       avglat_vec.push_back(average_latency);
       sla_vec.push_back(sla);
+      commit_vec.push_back(stat_committed_tx_total);
+      val_fail_vec.push_back(stat_val_fail_total);
+      sample_taillat_vec.push_back(sample_tail_latency);
+      sample_avglat_vec.push_back(sample_avg_latency);
+      sample_commit_vec.push_back(sample_count);
       mux.unlock();
       output_of << tx_tput << " " << percentile_50 << " " << percentile_99
-                << " " << average_latency << " " << sla << std::endl;
+                << " " << average_latency << " " << sla << " "
+                << stat_committed_tx_total << std::endl;
       output_of.close();
       // std::cout << tx_tput << " " << percentile_50 << " " << percentile_99 <<
       // std::endl;
@@ -699,6 +869,7 @@ void RunMICRO(coro_yield_t& yield, coro_id_t coro_id) {
   /**************************** Stat end ****************************/
 
   delete dtx;
+  delete[] sample_timer;
 }
 
 void run_thread(thread_params* params, TATP* tatp_cli, SmallBank* smallbank_cli,
@@ -737,6 +908,9 @@ void run_thread(thread_params* params, TATP* tatp_cli, SmallBank* smallbank_cli,
   status = params->global_status;
   lock_table = params->global_lcache;
   coro_num = (coro_id_t)params->coro_num;
+  sla_timeout = params->sla_timeout;
+  use_priority = params->use_priority;
+  use_sample_priority = params->use_sample_priority;
   coro_sched = new CoroutineScheduler(thread_gid, coro_num);
 
   auto alloc_rdma_region_range =
@@ -750,16 +924,17 @@ void run_thread(thread_params* params, TATP* tatp_cli, SmallBank* smallbank_cli,
 
   // Initialize Zipf generator for MICRO benchmark
   if (bench_name == "micro") {
-    uint64_t zipf_seed = 2 * thread_gid * GetCPUCycle();
-    uint64_t zipf_seed_mask = (uint64_t(1) << 48) - 1;
     std::string micro_config_filepath = "../../../config/micro_config.json";
     auto json_config = JsonConfig::load_file(micro_config_filepath);
     auto micro_conf = json_config.get("micro");
     num_keys_global = align_pow2(micro_conf.get("num_keys").get_int64());
-    auto zipf_theta = micro_conf.get("zipf_theta").get_double();
     is_skewed = micro_conf.get("is_skewed").get_bool();
-    write_ratio = micro_conf.get("write_ratio").get_uint64();
+    zipf_theta = micro_conf.get("zipf_theta").get_double();
     data_set_size = micro_conf.get("data_set_size").get_uint64();
+    write_ratio = micro_conf.get("write_ratio").get_uint64();
+
+    uint64_t zipf_seed = 2 * thread_gid * GetCPUCycle();  // TODO
+    uint64_t zipf_seed_mask = (uint64_t(1) << 48) - 1;
     zipf_gen =
         new ZipfGen(num_keys_global, zipf_theta, zipf_seed & zipf_seed_mask);
   }
@@ -769,6 +944,7 @@ void run_thread(thread_params* params, TATP* tatp_cli, SmallBank* smallbank_cli,
 
   // Guarantee that each thread has a global different initial seed
   seed = 0xdeadbeef + thread_gid;
+  lock_seed = 0xdeadbeef + thread_gid;
 
   // Init coroutines
   for (coro_id_t coro_i = 0; coro_i < coro_num; coro_i++) {
@@ -777,6 +953,18 @@ void run_thread(thread_params* params, TATP* tatp_cli, SmallBank* smallbank_cli,
                               static_cast<uint64_t>(coro_i));
     random_generator[coro_i].SetSeed(coro_seed);
     coro_sched->coro_array[coro_i].coro_id = coro_i;
+
+    // if (bench_name == "micro") {
+    //   uint64_t zipf_seed = coro_seed;
+    //   uint64_t zipf_seed_mask = (uint64_t(1) << 48) - 1;
+    //   auto zipf_gen_ =
+    //       new ZipfGen(num_keys_global, zipf_theta, zipf_seed &
+    //       zipf_seed_mask);
+    //   mux.lock();
+    //   zipf_gens.push_back(zipf_gen_); // TODO
+    //   mux.unlock();
+    // }
+
     // Bind workload to coroutine
     if (coro_i == POLL_ROUTINE_ID) {
       coro_sched->coro_array[coro_i].func =

@@ -21,6 +21,9 @@ struct thread_params {
   RDMARegionAllocator* global_rdma_region;
   int coro_num;
   std::string bench_name;
+  int sla_timeout;
+  int use_priority;
+  int use_sample_priority;
 };
 
 void run_thread(thread_params* params, TATP* tatp_client,

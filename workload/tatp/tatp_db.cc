@@ -1,6 +1,4 @@
-// Author: Ming Zhang
-// Copyright (c) 2022
-
+ 
 #include "tatp_db.h"
 
 #include "unistd.h"

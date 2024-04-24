@@ -1,5 +1,4 @@
-// Author: Ming Zhang
-// Copyright (c) 2022
+
 
 #include "micro/micro_db.h"
 

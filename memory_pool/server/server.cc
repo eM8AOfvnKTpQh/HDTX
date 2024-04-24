@@ -7,7 +7,13 @@
 
 #include "util/json_config.h"
 
-const int post_num = 500;
+#define AUTO_ENABLE 0
+
+#if AUTO_ENABLE
+const int post_num = 1000;
+#else
+const int post_num = 4000;
+#endif
 char* lock_buffer;
 
 void Server::AllocMem() {
@@ -29,13 +35,13 @@ void Server::AllocMem() {
     assert(hash_buffer);
     RDMA_LOG(INFO) << "Alloc DRAM data region success!";
   }
-  // reserve 1/4 for hash conflict in case of full bucket
+  // Reserve 1/4 for hash conflict in case of full bucket.
   size_t reserve_start = hash_buf_size * 0.75;
   hash_reserve_buffer = hash_buffer + reserve_start;
-  // allocate log buffer
+  // Allocate log buffer.
   log_buffer = (char*)malloc(log_buf_size);
   assert(log_buffer);
-  // reserve buffer for lock
+  // Reserve buffer for lock.
   reserve_start = log_buf_size * 0.90;
   lock_buffer = log_buffer + reserve_start;
 }
@@ -47,10 +53,82 @@ void Server::InitMem() {
   RDMA_LOG(INFO) << "Initialize memory success!";
 }
 
+/**
+ * This method requires manual posting enable.
+ */
 void post_memcpy(RCQP* recv_qp, RCQP* wait_qp) {
-  // offload operations
+  // Offload operations.
   uint64_t write_wr_id = wait_qp->next_wr_id(true);
-  // setting the SGE
+  // Setting the SGE.
+  struct ibv_sge sge1 {
+    .addr = 0, .length = DataItemSize - sizeof(uint64_t),
+    .lkey = wait_qp->local_mr_.key
+  };
+  struct ibv_exp_send_wr write_sr =
+      wait_qp->create_exp_wr(IBV_EXP_WR_RDMA_WRITE, 1, &sge1, 0, 0, 0,
+                             IBV_EXP_SEND_SIGNALED, write_wr_id);
+
+  uint64_t faa_wr_id = wait_qp->next_wr_id(true);
+  struct ibv_sge sge2 {
+    .addr = (uint64_t)lock_buffer, .length = sizeof(uint64_t),
+    .lkey = wait_qp->local_mr_.key
+  };
+  struct ibv_exp_send_wr faa_sr =
+      wait_qp->create_exp_wr(IBV_EXP_WR_ATOMIC_FETCH_AND_ADD, 1, &sge2, 0, 0, 0,
+                             IBV_EXP_SEND_SIGNALED, faa_wr_id);
+
+  write_sr.next = &faa_sr;
+
+  struct ibv_exp_send_wr* bad_sr;
+  wait_qp->ibv_exp_post_send_wrapper(wait_qp->qp_, &write_sr, &bad_sr);
+
+  // Get the wqe address.
+  // Write wqe: ctrl seg + raddr seg + data seg
+  struct wqe_ctrl_seg* sr_ctrl = wait_qp->get_wqe_by_wr_id(write_wr_id);
+  // Shift 16 bytes to get the start addr of raddr seg.
+  char* seg = ((char*)sr_ctrl) + sizeof(struct wqe_ctrl_seg);
+  struct ibv_sge sg_list[4];
+  // Data addr
+  struct wqe_raddr_seg* sr_raddr = (struct wqe_raddr_seg*)seg;
+  sg_list[0].addr = (uint64_t)&sr_raddr->raddr;
+  sg_list[0].length = sizeof(uint64_t);
+  sg_list[0].lkey = wait_qp->wq_mr_->lkey;
+  // Log addr
+  seg += sizeof(struct wqe_raddr_seg);
+  struct wqe_data_seg* sr_data = (struct wqe_data_seg*)seg;
+  sg_list[1].addr = (uint64_t)&sr_data->addr;
+  sg_list[1].length = sizeof(uint64_t);
+  sg_list[1].lkey = wait_qp->wq_mr_->lkey;
+  // FAA wqe: ctrl seg + raddr seg + atmoic seg
+  sr_ctrl = wait_qp->get_wqe_by_wr_id(faa_wr_id);
+  seg = ((char*)sr_ctrl) + sizeof(struct wqe_ctrl_seg);
+  // Data addr
+  sr_raddr = (struct wqe_raddr_seg*)seg;
+  sg_list[2].addr = (uint64_t)&sr_raddr->raddr;
+  sg_list[2].length = sizeof(uint64_t);
+  sg_list[2].lkey = wait_qp->wq_mr_->lkey;
+  // Add value
+  seg += sizeof(struct wqe_raddr_seg);
+  struct wqe_atomic_seg* sr_atomic = (struct wqe_atomic_seg*)seg;
+  sg_list[3].addr = (uint64_t)&sr_atomic->swap_add;
+  sg_list[3].length = sizeof(uint64_t);
+  sg_list[3].lkey = wait_qp->wq_mr_->lkey;
+  recv_qp->post_recv_sg(4, sg_list, recv_qp->next_wr_id(false));
+}
+
+/**
+ * This method will auto post enable.
+ */
+void post_memcpy_v2(RCQP* recv_qp, RCQP* wait_qp) {
+  // Offload operations.
+  struct ibv_exp_send_wr wait_sr =
+      wait_qp->create_exp_wait_wr(recv_qp, 0, wait_qp->next_wr_id(true), true);
+  uint64_t enable_wr_id = wait_qp->next_wr_id(true);
+  struct ibv_exp_send_wr enable_sr =
+      wait_qp->create_exp_enable_wr(wait_qp, 0, 0, enable_wr_id);
+
+  uint64_t write_wr_id = wait_qp->next_wr_id(true);
+  // Setting the SGE.
   struct ibv_sge sge1 {
     .addr = 0, .length = DataItemSize - sizeof(uint64_t),
     .lkey = wait_qp->local_mr_.key
@@ -66,38 +144,46 @@ void post_memcpy(RCQP* recv_qp, RCQP* wait_qp) {
   struct ibv_exp_send_wr faa_sr = wait_qp->create_exp_wr(
       IBV_EXP_WR_ATOMIC_FETCH_AND_ADD, 1, &sge2, 0, 0, 0, 0, faa_wr_id);
 
+  wait_sr.next = &enable_sr;
+  enable_sr.next = &write_sr;
   write_sr.next = &faa_sr;
 
   struct ibv_exp_send_wr* bad_sr;
-  wait_qp->ibv_exp_post_send_wrapper(wait_qp->qp_, &write_sr, &bad_sr);
+  wait_qp->ibv_exp_post_send_wrapper(wait_qp->qp_, &wait_sr, &bad_sr);
 
-  // get the wqe address
-  // write wqe: ctrl seg + raddr seg + data seg
-  struct wqe_ctrl_seg* sr_ctrl = wait_qp->get_wqe_by_wr_id(write_wr_id);
-  // shift 16 bytes to get the start addr of raddr seg
+  // Set PI.
+  struct wqe_ctrl_seg* sr_ctrl = wait_qp->get_wqe_by_wr_id(enable_wr_id);
   char* seg = ((char*)sr_ctrl) + sizeof(struct wqe_ctrl_seg);
+  struct wqe_wait_en_seg* sr_en_wait = (struct wqe_wait_en_seg*)seg;
+  sr_en_wait->pi = htonl(wait_qp->scur_post + 2);
+
+  // Get the wqe address.
+  // Write wqe: ctrl seg + raddr seg + data seg
+  sr_ctrl = wait_qp->get_wqe_by_wr_id(write_wr_id);
+  // Shift 16 bytes to get the start addr of raddr seg.
+  seg = ((char*)sr_ctrl) + sizeof(struct wqe_ctrl_seg);
   struct ibv_sge sg_list[4];
-  // data addr
+  // Data addr
   struct wqe_raddr_seg* sr_raddr = (struct wqe_raddr_seg*)seg;
   sg_list[0].addr = (uint64_t)&sr_raddr->raddr;
   sg_list[0].length = sizeof(uint64_t);
   sg_list[0].lkey = wait_qp->wq_mr_->lkey;
-  // log addr
+  // Log addr
   seg += sizeof(struct wqe_raddr_seg);
   struct wqe_data_seg* sr_data = (struct wqe_data_seg*)seg;
   // RDMA_LOG(INFO) << ntohl(sr_data->byte_count);
   sg_list[1].addr = (uint64_t)&sr_data->addr;
   sg_list[1].length = sizeof(uint64_t);
   sg_list[1].lkey = wait_qp->wq_mr_->lkey;
-  // faa wqe: ctrl seg + raddr seg + atmoic seg
+  // FAA wqe: ctrl seg + raddr seg + atmoic seg
   sr_ctrl = wait_qp->get_wqe_by_wr_id(faa_wr_id);
   seg = ((char*)sr_ctrl) + sizeof(struct wqe_ctrl_seg);
-  // data addr
+  // Data addr
   sr_raddr = (struct wqe_raddr_seg*)seg;
   sg_list[2].addr = (uint64_t)&sr_raddr->raddr;
   sg_list[2].length = sizeof(uint64_t);
   sg_list[2].lkey = wait_qp->wq_mr_->lkey;
-  // add value
+  // Add value
   seg += sizeof(struct wqe_raddr_seg);
   struct wqe_atomic_seg* sr_atomic = (struct wqe_atomic_seg*)seg;
   // RDMA_LOG(INFO) << ntohll(sr_atomic->swap_add);
@@ -116,12 +202,29 @@ void* poll_cq_loop(void* data) {
     auto rc = qp->poll_till_completion(wc, no_timeout);
     if (rc == SUCC) {
       if (wc.opcode == IBV_WC_RECV) {
-        // enable first two wrs
+        // RDMA_LOG(INFO) << "Post memcpy.";
+#if !AUTO_ENABLE
+        // Enable first two wrs.
         qp->post_enable(qp->wait_qp, 0, 2, false, qp->next_wr_id(true), true);
         post_memcpy(qp, qp->wait_qp);
+#else
+        post_memcpy_v2(qp, qp->wait_qp);
+#endif
+      } else if (wc.opcode == IBV_WC_FETCH_ADD) {
+        RDMA_LOG(INFO) << "wr_id: " << wc.wr_id
+                       << " index: " << qp->sq_index[wc.wr_id];
+        struct wqe_ctrl_seg* sr_ctrl = qp->get_wqe_by_wr_id(wc.wr_id);
+        char* seg = ((char*)sr_ctrl) + sizeof(struct wqe_ctrl_seg);
+        struct wqe_raddr_seg* sr_raddr = (struct wqe_raddr_seg*)seg;
+        RDMA_LOG(INFO) << "raddr: " << ntohll(sr_raddr->raddr);
+        seg += sizeof(struct wqe_raddr_seg);
+        struct wqe_atomic_seg* sr_atomic = (struct wqe_atomic_seg*)seg;
+        RDMA_LOG(INFO) << "add: " << ntohll(sr_atomic->swap_add);
+      } else if (wc.opcode == IBV_WC_SEND) {
+        RDMA_LOG(INFO) << "Send completion.";
       }
     } else {
-      RDMA_LOG(WARNING) << "failed to poll completion event.";
+      RDMA_LOG(WARNING) << "Failed to poll completion event.";
     }
   } while (qp->running);
   return nullptr;
@@ -143,27 +246,35 @@ void Server::InitRDMA() {
                                          rdma_ctrl->get_device()) == true);
   RDMA_LOG(INFO) << "Register memory success!";
 
-#ifdef EXP_VERBS
-  // call the function when connection established
+  // This function will be called after establishing the connection.
   auto app_on_connect_cb = [=](QP* qp) {
     RCQP* rc_qp = dynamic_cast<RCQP*>(qp);
-    if (rc_qp->use_offload) {  // use offload
-      RDMA_LOG(INFO) << "Use offload";
+    if (rc_qp->use_offload) {  // Use offload.
+      RDMA_LOG(INFO) << "Use offload.";
       RCQP* wait_qp = rc_qp->wait_qp;
-      // bind mr for wait_qp
+      // Bind mr for wait_qp.
       wait_qp->bind_local_mr(rdma_ctrl->get_local_mr(SERVER_LOG_BUFF_ID));
       wait_qp->bind_remote_mr(rdma_ctrl->get_local_mr(SERVER_HASH_BUFF_ID));
-      // create thread for polling completion event
+      // Create thread for polling completion event.
       pthread_create(&rc_qp->cq_poll_thread, nullptr, poll_cq_loop, rc_qp);
-      // pre post wrs
+      // pthread_create(&wait_qp->cq_poll_thread, nullptr, poll_cq_loop,
+      // wait_qp);
+      //  Pre post wrs.
       for (int i = 0; i < post_num; i++) {
+#if !AUTO_ENABLE
         post_memcpy(rc_qp, wait_qp);
+#else
+        post_memcpy_v2(rc_qp, wait_qp);
+#endif
       }
+#if AUTO_ENABLE
+      // Enable first two wrs.
+      rc_qp->post_enable(wait_qp, 0, 2, false, rc_qp->next_wr_id(true));
+#endif
     }
   };
-  
+
   rdma_ctrl->register_qp_callback(app_on_connect_cb);
-#endif
 }
 
 // All servers need to load data

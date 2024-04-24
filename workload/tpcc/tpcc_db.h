@@ -1,5 +1,4 @@
-// Author: Ming Zhang, Lurong Liu
-// Copyright (c) 2022
+ 
 
 #pragma once
 
@@ -13,10 +12,9 @@
 #include "util/fast_random.h"
 #include "util/json_config.h"
 
-// YYYY-MM-DD HH:MM:SS This is supposed to be a date/time field from Jan 1st 1900 -
-// Dec 31st 2100 with a resolution of 1 second. See TPC-C 5.11.0.
-// static const int DATETIME_SIZE = 14;
-// Use uint32 for data and time
+// YYYY-MM-DD HH:MM:SS This is supposed to be a date/time field from Jan 1st
+// 1900 - Dec 31st 2100 with a resolution of 1 second. See TPC-C 5.11.0. static
+// const int DATETIME_SIZE = 14; Use uint32 for data and time
 static int g_uniform_item_dist = 0;
 
 static int g_new_order_remote_item_pct = 1;
@@ -26,15 +24,9 @@ static int g_mico_dist_num = 20;
 static const size_t CustomerLastNameMaxSize = 16;
 
 static std::string NameTokens[10] = {
-    std::string("BAR"),
-    std::string("OUGHT"),
-    std::string("ABLE"),
-    std::string("PRI"),
-    std::string("PRES"),
-    std::string("ESE"),
-    std::string("ANTI"),
-    std::string("CALLY"),
-    std::string("ATION"),
+    std::string("BAR"),  std::string("OUGHT"), std::string("ABLE"),
+    std::string("PRI"),  std::string("PRES"),  std::string("ESE"),
+    std::string("ANTI"), std::string("CALLY"), std::string("ATION"),
     std::string("EING"),
 };
 
@@ -50,7 +42,8 @@ static const int NUM_DISTRICT_PER_WAREHOUSE = 10;
 
 // Constants
 struct Address {
-  static const int MIN_STREET = 10;  // W_STREET_1 random a-string [10 .. 20] W_STREET_2 random a-string [10 .. 20]
+  static const int MIN_STREET = 10;  // W_STREET_1 random a-string [10 .. 20]
+                                     // W_STREET_2 random a-string [10 .. 20]
   static const int MAX_STREET = 20;
   static const int MIN_CITY = 10;  // W_CITY random a-string [10 .. 20]
   static const int MAX_CITY = 20;
@@ -58,7 +51,8 @@ struct Address {
   static const int ZIP = 9;    // ZIP a-string of 9 letters
 };
 
-/******************** TPCC table definitions (Schemas of key and value) start **********************/
+/******************** TPCC table definitions (Schemas of key and value) start
+ * **********************/
 /*
  * Warehouse table
  * Primary key: <int32_t w_id>
@@ -71,9 +65,7 @@ union tpcc_warehouse_key_t {
   };
   itemkey_t item_key;
 
-  tpcc_warehouse_key_t() {
-    item_key = 0;
-  }
+  tpcc_warehouse_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_warehouse_key_t) == sizeof(itemkey_t), "");
@@ -105,9 +97,7 @@ union tpcc_district_key_t {
   };
   itemkey_t item_key;
 
-  tpcc_district_key_t() {
-    item_key = 0;
-  }
+  tpcc_district_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_district_key_t) == sizeof(itemkey_t), "");
@@ -138,9 +128,7 @@ union tpcc_customer_key_t {
   int64_t c_id;
   itemkey_t item_key;
 
-  tpcc_customer_key_t() {
-    item_key = 0;
-  }
+  tpcc_customer_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_customer_key_t) == sizeof(itemkey_t), "");
@@ -183,9 +171,7 @@ union tpcc_customer_index_key_t {
   };
   itemkey_t item_key;
 
-  tpcc_customer_index_key_t() {
-    item_key = 0;
-  }
+  tpcc_customer_index_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_customer_index_key_t) == sizeof(itemkey_t), "");
@@ -207,15 +193,14 @@ union tpcc_history_key_t {
   int64_t h_id;
   itemkey_t item_key;
 
-  tpcc_history_key_t() {
-    item_key = 0;
-  }
+  tpcc_history_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_history_key_t) == sizeof(itemkey_t), "");
 
 struct tpcc_history_val_t {
-  static const int MIN_DATA = 12;  // H_DATA random a-string [12 .. 24] from TPCC documents 5.11
+  static const int MIN_DATA =
+      12;  // H_DATA random a-string [12 .. 24] from TPCC documents 5.11
   static const int MAX_DATA = 24;
 
   float h_amount;
@@ -233,9 +218,7 @@ union tpcc_new_order_key_t {
   int64_t no_id;
   itemkey_t item_key;
 
-  tpcc_new_order_key_t() {
-    item_key = 0;
-  }
+  tpcc_new_order_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_new_order_key_t) == sizeof(itemkey_t), "");
@@ -258,9 +241,7 @@ union tpcc_order_key_t {
   int64_t o_id;
   itemkey_t item_key;
 
-  tpcc_order_key_t() {
-    item_key = 0;
-  }
+  tpcc_order_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_order_key_t) == sizeof(itemkey_t), "");
@@ -282,9 +263,7 @@ union tpcc_order_index_key_t {
   int64_t o_index_id;
   itemkey_t item_key;
 
-  tpcc_order_index_key_t() {
-    item_key = 0;
-  }
+  tpcc_order_index_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_order_index_key_t) == sizeof(itemkey_t), "");
@@ -299,16 +278,15 @@ static_assert(sizeof(tpcc_order_index_val_t) == 16, "");  // add debug magic
 
 /*
  * OrderLine table
- * Primary key: <int32_t ol_o_id, int32_t ol_d_id, int32_t ol_w_id, int32_t ol_number>
+ * Primary key: <int32_t ol_o_id, int32_t ol_d_id, int32_t ol_w_id, int32_t
+ * ol_number>
  */
 
 union tpcc_order_line_key_t {
   int64_t ol_id;
   itemkey_t item_key;
 
-  tpcc_order_line_key_t() {
-    item_key = 0;
-  }
+  tpcc_order_line_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_order_line_key_t) == sizeof(itemkey_t), "");
@@ -340,9 +318,7 @@ union tpcc_item_key_t {
   };
   itemkey_t item_key;
 
-  tpcc_item_key_t() {
-    item_key = 0;
-  }
+  tpcc_item_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_item_key_t) == sizeof(itemkey_t), "");
@@ -377,9 +353,7 @@ union tpcc_stock_key_t {
   };
   itemkey_t item_key;
 
-  tpcc_stock_key_t() {
-    item_key = 0;
-  }
+  tpcc_stock_key_t() { item_key = 0; }
 };
 
 static_assert(sizeof(tpcc_stock_key_t) == sizeof(itemkey_t), "");
@@ -597,12 +571,14 @@ struct Stock {
 };
 #endif
 
-/******************** TPCC table definitions (Schemas of key and value) end **********************/
+/******************** TPCC table definitions (Schemas of key and value) end
+ * **********************/
 
 // Magic numbers for debugging. These are unused in the spec.
 const std::string tpcc_zip_magic("123456789");  // warehouse, district
 const uint32_t tpcc_no_time_magic = 0;          // customer, history, order
-const int64_t tpcc_add_magic = 818;             // customer_index, order_index, new_order, order_line, item, stock
+const int64_t tpcc_add_magic =
+    818;  // customer_index, order_index, new_order, order_line, item, stock
 
 #define TATP_MAGIC 97 /* Some magic number <= 255 */
 #define tatp_sub_msc_location_magic (TATP_MAGIC)
@@ -628,9 +604,8 @@ enum class TPCCTxType {
   kStockLevel,
 };
 
-
-const std::string TPCC_TX_NAME[TPCC_TX_TYPES] = {"NewOrder", "Payment", "Delivery", \
-"OrderStatus", "StockLevel"};
+const std::string TPCC_TX_NAME[TPCC_TX_TYPES] = {
+    "NewOrder", "Payment", "Delivery", "OrderStatus", "StockLevel"};
 
 // Table id
 enum class TPCCTableType : uint64_t {
@@ -650,7 +625,7 @@ enum class TPCCTableType : uint64_t {
 class TPCC {
  public:
   std::string bench_name;
-  
+
   // Pre-defined constants, which will be modified for tests
   uint32_t num_warehouse = 3000;
 
@@ -689,28 +664,37 @@ class TPCC {
 
   std::vector<HashStore*> backup_table_ptrs;
 
-  // For server and client usage: Provide interfaces to servers for loading tables
+  // For server and client usage: Provide interfaces to servers for loading
+  // tables
   TPCC() {
     bench_name = "TPCC";
-    std::string warehouse_config_filepath = "../../../workload/tpcc/tpcc_tables/warehouse.json";
-    auto warehouse_json_config = JsonConfig::load_file(warehouse_config_filepath);
+    std::string warehouse_config_filepath =
+        "../../../workload/tpcc/tpcc_tables/warehouse.json";
+    auto warehouse_json_config =
+        JsonConfig::load_file(warehouse_config_filepath);
     auto warehouse_table_config = warehouse_json_config.get("table");
-    std::string district_config_filepath = "../../../workload/tpcc/tpcc_tables/district.json";
+    std::string district_config_filepath =
+        "../../../workload/tpcc/tpcc_tables/district.json";
     auto district_json_config = JsonConfig::load_file(district_config_filepath);
     auto district_table_config = district_json_config.get("table");
-    std::string customer_config_filepath = "../../../workload/tpcc/tpcc_tables/customer.json";
+    std::string customer_config_filepath =
+        "../../../workload/tpcc/tpcc_tables/customer.json";
     auto customer_json_config = JsonConfig::load_file(customer_config_filepath);
     auto customer_table_config = customer_json_config.get("table");
-    std::string item_config_filepath = "../../../workload/tpcc/tpcc_tables/item.json";
+    std::string item_config_filepath =
+        "../../../workload/tpcc/tpcc_tables/item.json";
     auto item_json_config = JsonConfig::load_file(item_config_filepath);
     auto item_table_config = item_json_config.get("table");
-    std::string stock_config_filepath = "../../../workload/tpcc/tpcc_tables/stock.json";
+    std::string stock_config_filepath =
+        "../../../workload/tpcc/tpcc_tables/stock.json";
     auto stock_json_config = JsonConfig::load_file(stock_config_filepath);
     auto stock_table_config = stock_json_config.get("table");
 
     num_warehouse = warehouse_table_config.get("bkt_num").get_uint64();
-    num_district_per_warehouse = district_table_config.get("bkt_num").get_uint64();
-    num_customer_per_district = customer_table_config.get("bkt_num").get_uint64();
+    num_district_per_warehouse =
+        district_table_config.get("bkt_num").get_uint64();
+    num_customer_per_district =
+        customer_table_config.get("bkt_num").get_uint64();
     num_item = item_table_config.get("bkt_num").get_uint64();
     num_stock_per_warehouse = stock_table_config.get("bkt_num").get_uint64();
   }
@@ -753,42 +737,39 @@ class TPCC {
   }
 
   // For server-side usage
-  void LoadTable(node_id_t node_id,
-                 node_id_t num_server,
+  void LoadTable(node_id_t node_id, node_id_t num_server,
                  MemStoreAllocParam* mem_store_alloc_param,
                  MemStoreReserveParam* mem_store_reserve_param);
 
-  void PopulateWarehouseTable(unsigned long seed, MemStoreReserveParam* mem_store_reserve_param);
+  void PopulateWarehouseTable(unsigned long seed,
+                              MemStoreReserveParam* mem_store_reserve_param);
 
-  void PopulateDistrictTable(unsigned long seed, MemStoreReserveParam* mem_store_reserve_param);
+  void PopulateDistrictTable(unsigned long seed,
+                             MemStoreReserveParam* mem_store_reserve_param);
 
-  void PopulateCustomerAndHistoryTable(unsigned long seed, MemStoreReserveParam* mem_store_reserve_param);
+  void PopulateCustomerAndHistoryTable(
+      unsigned long seed, MemStoreReserveParam* mem_store_reserve_param);
 
-  void PopulateOrderNewOrderAndOrderLineTable(unsigned long seed, MemStoreReserveParam* mem_store_reserve_param);
+  void PopulateOrderNewOrderAndOrderLineTable(
+      unsigned long seed, MemStoreReserveParam* mem_store_reserve_param);
 
-  void PopulateItemTable(unsigned long seed, MemStoreReserveParam* mem_store_reserve_param);
+  void PopulateItemTable(unsigned long seed,
+                         MemStoreReserveParam* mem_store_reserve_param);
 
-  void PopulateStockTable(unsigned long seed, MemStoreReserveParam* mem_store_reserve_param);
+  void PopulateStockTable(unsigned long seed,
+                          MemStoreReserveParam* mem_store_reserve_param);
 
-  int LoadRecord(HashStore* table,
-                 itemkey_t item_key,
-                 void* val_ptr,
-                 size_t val_size,
-                 table_id_t table_id,
+  int LoadRecord(HashStore* table, itemkey_t item_key, void* val_ptr,
+                 size_t val_size, table_id_t table_id,
                  MemStoreReserveParam* mem_store_reserve_param);
-  DataItem* GetRecord(HashStore* table,
-                      itemkey_t item_key,
+  DataItem* GetRecord(HashStore* table, itemkey_t item_key,
                       table_id_t table_id);
 
   ALWAYS_INLINE
-  std::vector<HashStore*>& GetPrimaryHashStore() {
-    return primary_table_ptrs;
-  }
+  std::vector<HashStore*>& GetPrimaryHashStore() { return primary_table_ptrs; }
 
   ALWAYS_INLINE
-  std::vector<HashStore*>& GetBackupHashStore() {
-    return backup_table_ptrs;
-  }
+  std::vector<HashStore*>& GetBackupHashStore() { return backup_table_ptrs; }
 
   /* Followng pieces of codes mainly comes from Silo */
   ALWAYS_INLINE
@@ -809,22 +790,30 @@ class TPCC {
 
   ALWAYS_INLINE
   int RandomNumber(FastRandom& r, int min, int max) {
-    return CheckBetweenInclusive((int)(r.NextUniform() * (max - min + 1) + min), min, max);
+    return CheckBetweenInclusive((int)(r.NextUniform() * (max - min + 1) + min),
+                                 min, max);
   }
 
   ALWAYS_INLINE
   int NonUniformRandom(FastRandom& r, int A, int C, int min, int max) {
-    return (((RandomNumber(r, 0, A) | RandomNumber(r, min, max)) + C) % (max - min + 1)) + min;
+    return (((RandomNumber(r, 0, A) | RandomNumber(r, min, max)) + C) %
+            (max - min + 1)) +
+           min;
   }
 
   ALWAYS_INLINE
   int64_t GetItemId(FastRandom& r) {
-    return CheckBetweenInclusive(g_uniform_item_dist ? RandomNumber(r, 1, num_item) : NonUniformRandom(r, 8191, 7911, 1, num_item), 1, num_item);
+    return CheckBetweenInclusive(
+        g_uniform_item_dist ? RandomNumber(r, 1, num_item)
+                            : NonUniformRandom(r, 8191, 7911, 1, num_item),
+        1, num_item);
   }
 
   ALWAYS_INLINE
   int GetCustomerId(FastRandom& r) {
-    return CheckBetweenInclusive(NonUniformRandom(r, 1023, 259, 1, num_customer_per_district), 1, num_customer_per_district);
+    return CheckBetweenInclusive(
+        NonUniformRandom(r, 1023, 259, 1, num_customer_per_district), 1,
+        num_customer_per_district);
   }
 
   // pick a number between [start, end)
@@ -832,8 +821,7 @@ class TPCC {
   unsigned PickWarehouseId(FastRandom& r, unsigned start, unsigned end) {
     assert(start < end);
     const unsigned diff = end - start;
-    if (diff == 1)
-      return start;
+    if (diff == 1) return start;
     return (r.Next() % diff) + start;
   }
 
@@ -889,8 +877,7 @@ class TPCC {
   ALWAYS_INLINE
   std::string RandomStr(FastRandom& r, uint64_t len) {
     // this is a property of the oltpbench implementation...
-    if (!len)
-      return "";
+    if (!len) return "";
 
     uint64_t i = 0;
     std::string buf(len, 0);
@@ -898,8 +885,7 @@ class TPCC {
       const char c = (char)r.NextChar();
       // XXX(stephentu): oltpbench uses java's Character.isLetter(), which
       // is a less restrictive filter than isalnum()
-      if (!isalnum(c))
-        continue;
+      if (!isalnum(c)) continue;
       buf[i++] = c;
     }
     return buf;
@@ -910,8 +896,7 @@ class TPCC {
   std::string RandomNStr(FastRandom& r, uint64_t len) {
     const char base = '0';
     std::string buf(len, 0);
-    for (uint64_t i = 0; i < len; i++)
-      buf[i] = (char)(base + (r.Next() % 10));
+    for (uint64_t i = 0; i < len; i++) buf[i] = (char)(base + (r.Next() % 10));
     return buf;
   }
 
@@ -926,7 +911,8 @@ class TPCC {
   ALWAYS_INLINE
   int64_t MakeCustomerKey(int32_t w_id, int32_t d_id, int32_t c_id) {
     int32_t upper_id = w_id * num_district_per_warehouse + d_id;
-    int64_t id = static_cast<int64_t>(upper_id) << 32 | static_cast<int64_t>(c_id);
+    int64_t id =
+        static_cast<int64_t>(upper_id) << 32 | static_cast<int64_t>(c_id);
     // assert(customerKeyToWare(id) == w_id);
     return id;
   }
@@ -948,7 +934,8 @@ class TPCC {
   }
 
   ALWAYS_INLINE
-  uint64_t MakeCustomerIndexKey(int32_t w_id, int32_t d_id, std::string s_last, std::string s_first) {
+  uint64_t MakeCustomerIndexKey(int32_t w_id, int32_t d_id, std::string s_last,
+                                std::string s_first) {
     uint64_t* seckey = new uint64_t[5];
     int32_t did = d_id + (w_id * num_district_per_warehouse);
     seckey[0] = did;
@@ -958,8 +945,11 @@ class TPCC {
   }
 
   ALWAYS_INLINE
-  int64_t MakeHistoryKey(int32_t h_w_id, int32_t h_d_id, int32_t h_c_w_id, int32_t h_c_d_id, int32_t h_c_id) {
-    int32_t cid = (h_c_w_id * num_district_per_warehouse + h_c_d_id) * num_customer_per_district + h_c_id;
+  int64_t MakeHistoryKey(int32_t h_w_id, int32_t h_d_id, int32_t h_c_w_id,
+                         int32_t h_c_d_id, int32_t h_c_id) {
+    int32_t cid = (h_c_w_id * num_district_per_warehouse + h_c_d_id) *
+                      num_customer_per_district +
+                  h_c_id;
     int32_t did = h_d_id + (h_w_id * num_district_per_warehouse);
     int64_t id = static_cast<int64_t>(cid) << 20 | static_cast<int64_t>(did);
     return id;
@@ -968,30 +958,38 @@ class TPCC {
   ALWAYS_INLINE
   int64_t MakeNewOrderKey(int32_t w_id, int32_t d_id, int32_t o_id) {
     int32_t upper_id = w_id * num_district_per_warehouse + d_id;
-    int64_t id = static_cast<int64_t>(upper_id) << 32 | static_cast<int64_t>(o_id);
+    int64_t id =
+        static_cast<int64_t>(upper_id) << 32 | static_cast<int64_t>(o_id);
     return id;
   }
 
   ALWAYS_INLINE
   int64_t MakeOrderKey(int32_t w_id, int32_t d_id, int32_t o_id) {
     int32_t upper_id = w_id * num_district_per_warehouse + d_id;
-    int64_t id = static_cast<int64_t>(upper_id) << 32 | static_cast<int64_t>(o_id);
+    int64_t id =
+        static_cast<int64_t>(upper_id) << 32 | static_cast<int64_t>(o_id);
     // assert(orderKeyToWare(id) == w_id);
     return id;
   }
 
   ALWAYS_INLINE
-  int64_t MakeOrderIndexKey(int32_t w_id, int32_t d_id, int32_t c_id, int32_t o_id) {
-    int32_t upper_id = (w_id * num_district_per_warehouse + d_id) * num_customer_per_district + c_id;
-    int64_t id = static_cast<int64_t>(upper_id) << 32 | static_cast<int64_t>(o_id);
+  int64_t MakeOrderIndexKey(int32_t w_id, int32_t d_id, int32_t c_id,
+                            int32_t o_id) {
+    int32_t upper_id =
+        (w_id * num_district_per_warehouse + d_id) * num_customer_per_district +
+        c_id;
+    int64_t id =
+        static_cast<int64_t>(upper_id) << 32 | static_cast<int64_t>(o_id);
     return id;
   }
 
   ALWAYS_INLINE
-  int64_t MakeOrderLineKey(int32_t w_id, int32_t d_id, int32_t o_id, int32_t number) {
+  int64_t MakeOrderLineKey(int32_t w_id, int32_t d_id, int32_t o_id,
+                           int32_t number) {
     int32_t upper_id = w_id * num_district_per_warehouse + d_id;
     // 10000000 is the MAX ORDER ID
-    int64_t oid = static_cast<int64_t>(upper_id) * 10000000 + static_cast<int64_t>(o_id);
+    int64_t oid =
+        static_cast<int64_t>(upper_id) * 10000000 + static_cast<int64_t>(o_id);
     int64_t olid = oid * 15 + number;
     int64_t id = static_cast<int64_t>(olid);
     // assert(orderLineKeyToWare(id) == w_id);
@@ -1009,51 +1007,71 @@ class TPCC {
 
 // consistency Requirements
 //
-// 1. Entries in the WAREHOUSE and DISTRICT tables must satisfy the relationship:
+// 1. Entries in the WAREHOUSE and DISTRICT tables must satisfy the
+// relationship:
 //        W_YTD = sum(D_YTD)
 //    for each warehouse defined by (W_ID = D_W_ID).
 
-// 2. Entries in the DISTRICT, ORDER, and NEW-ORDER tables must satisfy the relationship:
+// 2. Entries in the DISTRICT, ORDER, and NEW-ORDER tables must satisfy the
+// relationship:
 //         D_NEXT_O_ID - 1 = max(O_ID) = max(NO_O_ID)
-//     for each district defined by (D_W_ID = O_W_ID = NO_W_ID) and (D_ID = O_D_ID = NO_D_ID).
-//     This condition does not apply to the NEW-ORDER table for any districts which have no outstanding new orders
-//     (i.e., the numbe r of rows is zero).
+//     for each district defined by (D_W_ID = O_W_ID = NO_W_ID) and (D_ID =
+//     O_D_ID = NO_D_ID). This condition does not apply to the NEW-ORDER table
+//     for any districts which have no outstanding new orders (i.e., the numbe r
+//     of rows is zero).
 
 // 3. Entries in the NEW-ORDER table must satisfy the relationship:
-//         max(NO_O_ID) - min(NO_O_ID) + 1 = [number of rows in the NEW-ORDER table for this district]
+//         max(NO_O_ID) - min(NO_O_ID) + 1 = [number of rows in the NEW-ORDER
+//         table for this district]
 //     for each district defined by NO_W_ID and NO_D_ID.
-//     This condition does not apply to any districts which have no outstanding new orders (i.e., the number of rows is zero).
+//     This condition does not apply to any districts which have no outstanding
+//     new orders (i.e., the number of rows is zero).
 
 // 4. Entries in the ORDER and ORDER-LINE tables must satisfy the relationship:
-//         sum(O_OL_CNT) = [number of rows in the ORDER-LINE table for this district]
+//         sum(O_OL_CNT) = [number of rows in the ORDER-LINE table for this
+//         district]
 //     for each district defined by (O_W_ID = OL_W_ID) and (O_D_ID = OL_D_ID).
 
-// 5. For any row in the ORDER table, O_CARRIER_ID is set to a null value if and only if
-//     there is a corresponding row in the NEW-ORDER table defined by (O_W_ID, O_D_ID, O_ID) = (NO_W_ID, NO_D_ID, NO_O_ID).
+// 5. For any row in the ORDER table, O_CARRIER_ID is set to a null value if and
+// only if
+//     there is a corresponding row in the NEW-ORDER table defined by (O_W_ID,
+//     O_D_ID, O_ID) = (NO_W_ID, NO_D_ID, NO_O_ID).
 
-// 6. For any row in the ORDER table, O_OL_CNT must equal the number of rows in the ORDER-LINE table
-//     for the corresponding order defined by (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID).
+// 6. For any row in the ORDER table, O_OL_CNT must equal the number of rows in
+// the ORDER-LINE table
+//     for the corresponding order defined by (O_W_ID, O_D_ID, O_ID) = (OL_W_ID,
+//     OL_D_ID, OL_O_ID).
 
-// 7. For any row in the ORDER-LINE table, OL_DELIVERY_D is set to a null date/ time if and only if
+// 7. For any row in the ORDER-LINE table, OL_DELIVERY_D is set to a null date/
+// time if and only if
 //     the corresponding row in the ORDER table defined by
-//     (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID) has O_CARRIER_ID set to a null value.
+//     (O_W_ID, O_D_ID, O_ID) = (OL_W_ID, OL_D_ID, OL_O_ID) has O_CARRIER_ID set
+//     to a null value.
 
-// 8. Entries in the WAREHOUSE and HISTORY tables must satisfy the relationship: W_YTD = sum(H_AMOUNT)
+// 8. Entries in the WAREHOUSE and HISTORY tables must satisfy the relationship:
+// W_YTD = sum(H_AMOUNT)
 //     for each warehouse defined by (W_ID = H_W_ID). 3.3.2.9
 
-// 9. Entries in the DISTRICT and HISTORY tables must satisfy the relationship: D_YTD = sum(H_AMOUNT)
+// 9. Entries in the DISTRICT and HISTORY tables must satisfy the relationship:
+// D_YTD = sum(H_AMOUNT)
 //     for each district defined by (D_W_ID, D_ID) = (H_W_ID, H_D_ID). 3.3.2.10
 
-// 10. Entries in the CUSTOMER, HISTORY, ORDER, and ORDER-LINE tables must satisfy the relationship:
+// 10. Entries in the CUSTOMER, HISTORY, ORDER, and ORDER-LINE tables must
+// satisfy the relationship:
 //     C_BALANCE = sum(OL_AMOUNT) - sum(H_AMOUNT)
-//     where: H_AMOUNT is selected by (C_W_ID, C_D_ID, C_ID) = (H_C_W_ID, H_C_D_ID, H_C_ID) and
-//     OL_AMOUNT is selected by: (OL_W_ID, OL_D_ID, OL_O_ID) = (O_W_ID, O_D_ID, O_ID) and
-//     (O_W_ID, O_D_ID, O_C_ID) = (C_W_ID, C_D_ID, C_ID) and (OL_DELIVERY_D is not a null value)
+//     where: H_AMOUNT is selected by (C_W_ID, C_D_ID, C_ID) = (H_C_W_ID,
+//     H_C_D_ID, H_C_ID) and OL_AMOUNT is selected by: (OL_W_ID, OL_D_ID,
+//     OL_O_ID) = (O_W_ID, O_D_ID, O_ID) and (O_W_ID, O_D_ID, O_C_ID) = (C_W_ID,
+//     C_D_ID, C_ID) and (OL_DELIVERY_D is not a null value)
 
-// 11. Entries in the CUSTOMER, ORDER and NEW-ORDER tables must satisfy the relationship:
+// 11. Entries in the CUSTOMER, ORDER and NEW-ORDER tables must satisfy the
+// relationship:
 //     (count(*) from ORDER) - (count(*) from NEW-ORDER) = 2100
-//     for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) = (C_W_ID, C_D_ID). 3.3.2.12
+//     for each district defined by (O_W_ID, O_D_ID) = (NO_W_ID, NO_D_ID) =
+//     (C_W_ID, C_D_ID). 3.3.2.12
 
-// 12. Entries in the CUSTOMER and ORDER-LINE tables must satisfy the relationship:
+// 12. Entries in the CUSTOMER and ORDER-LINE tables must satisfy the
+// relationship:
 //     C_BALANCE + C_YTD_PAYMENT = sum(OL_AMOUNT)
-//     for any randomly selected customers and where OL_DELIVERY_D is not set to a null date/ time.
+//     for any randomly selected customers and where OL_DELIVERY_D is not set to
+//     a null date/ time.

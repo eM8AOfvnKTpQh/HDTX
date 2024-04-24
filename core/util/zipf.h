@@ -1,4 +1,4 @@
-// Author: Ming Zhang
+
 // Adapted from mica
 // Copyright (c) 2022
 

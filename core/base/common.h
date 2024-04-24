@@ -9,6 +9,7 @@
 using tx_id_t = uint64_t;     // Transaction id type
 using t_id_t = uint32_t;      // Thread id type
 using coro_id_t = int;        // Coroutine id type
+using u_id_t = uint64_t;      // Unique id type
 using node_id_t = int;        // Machine id type
 using mr_id_t = int;          // Memory region id type
 using table_id_t = uint64_t;  // Table id type
@@ -29,13 +30,13 @@ const mr_id_t CLIENT_MR_ID = 100;
 const uint64_t MEM_STORE_META_END = 0xE0FF0E0F;
 
 // Node and thread conf
-#define BACKUP_DEGREE 2  // Backup memory node number. MUST **NOT** BE SET TO 0
+#define BACKUP_DEGREE 1  // Backup memory node number. MUST **NOT** BE SET TO 0
 #define MAX_REMOTE_NODE_NUM 100  // Max remote memory node number
 #define MAX_DB_TABLE_NUM 15      // Max DB tables
 
 // Data state
 #define STATE_INVISIBLE 0x8000000000000000  // Data cannot be read
-#define STATE_VISIBLE 0x8000000000000000    // for fetch_and_add
+#define STATE_VISIBLE 0x8000000000000000    // for fetch_and_add in HDTX
 #define STATE_LOCKED \
   1  // Data cannot be written. Used for serializing transactions
 #define STATE_CLEAN 0

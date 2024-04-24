@@ -3,13 +3,7 @@
 #include "memstore/hash_store.h"
 #include "rlib/rdma_ctrl.hpp"
 
-enum DTX_SYS : int {
-  FaRM = 0,
-  DrTMH = 1,
-  FORD = 2,
-  LOCAL = 3,  // FORD with localized metadata including locks and versions
-  HDTX = 4
-};
+enum DTX_SYS : int { FaRM = 0, FORD = 1, HDTX = 2 };
 
 enum TXStatus : int {
   TX_INIT = 0,  // Transaction initialization
@@ -61,85 +55,85 @@ struct LockAddr {
 
 // For coroutines
 struct DirectRead {
-  RCQP *qp;
-  DataSetItem *item;
-  char *buf;
+  RCQP* qp;
+  DataSetItem* item;
+  char* buf;
   node_id_t remote_node;
 };
 
 struct HashRead {
-  RCQP *qp;
-  DataSetItem *item;
-  char *buf;
+  RCQP* qp;
+  DataSetItem* item;
+  char* buf;
   node_id_t remote_node;
   const HashMeta meta;
 };
 
 struct InvisibleRead {
-  RCQP *qp;
-  char *buf;
+  RCQP* qp;
+  char* buf;
   uint64_t off;
 };
 
 struct LockRead {
   size_t index;
-  RCQP *qp;
-  DataSetItem *item;
-  char *lock_buf;
-  char *data_buf;
-  bool re_read;
+  RCQP* qp;
+  DataSetItem* item;
+  char* lock_buf;
+  char* data_buf;
   node_id_t primary_node_id;
-  
+
   struct timeval start_time;
   int32_t client_turn;
-
+  bool re_read;  // Whether to re-read data
+  // Used to check lock state
   uint16_t low_turn_x_first;
   bool low_equals_first;
   bool high_equals_first;
-
+  // Used to check conflict
   uint16_t low_turn_x_old;
   uint16_t high_turn_x_old;
 };
 
 struct CasRead {
-  RCQP *qp;
-  DataSetItem *item;
-  char *cas_buf;
-  char *data_buf;
+  RCQP* qp;
+  DataSetItem* item;
+  char* cas_buf;
+  char* data_buf;
   node_id_t primary_node_id;
 };
 
 struct InsertOffRead {
-  RCQP *qp;
-  DataSetItem *item;
-  char *buf;
+  RCQP* qp;
+  DataSetItem* item;
+  char* buf;
   node_id_t remote_node;
   const HashMeta meta;
   offset_t node_off;
 };
 
 struct ValidateRead {
-  RCQP *qp;
-  DataSetItem *item;
-  char *lock_buf;
-  char *version_buf;
+  RCQP* qp;
+  DataSetItem* item;
+  char* lock_buf;
+  char* version_buf;
   bool has_lock_in_validate;
 };
 
 struct Lock {
-  RCQP *qp;
-  DataSetItem *item;
-  char *cas_buf;
+  RCQP* qp;
+  DataSetItem* item;
+  char* cas_buf;
   uint64_t lock_off;
 };
 
 struct Unlock {
-  char *cas_buf;
+  char* cas_buf;
 };
 
 struct Version {
-  DataSetItem *item;
-  char *version_buf;
+  DataSetItem* item;
+  char* version_buf;
 };
 
 struct CommitWrite {

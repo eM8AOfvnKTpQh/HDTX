@@ -1,6 +1,6 @@
 #include "dtx/dtx.h"
 
-bool DTX::CompareExeRO(coro_yield_t &yield) {
+bool DTX::CompareExeRO(coro_yield_t& yield) {
   std::vector<DirectRead> pending_direct_ro;
   std::vector<HashRead> pending_hash_ro;
 
@@ -18,7 +18,7 @@ bool DTX::CompareExeRO(coro_yield_t &yield) {
   return res;
 }
 
-bool DTX::CompareExeRW(coro_yield_t &yield) {
+bool DTX::CompareExeRW(coro_yield_t& yield) {
   std::vector<DirectRead> pending_direct_ro;
   std::vector<DirectRead> pending_direct_rw;
 
@@ -34,7 +34,6 @@ bool DTX::CompareExeRW(coro_yield_t &yield) {
   std::list<InvisibleRead> pending_invisible_ro;
 
   if (!CompareIssueReadRO(pending_direct_ro, pending_hash_ro)) return false;
-
   if (!CompareIssueReadRW(pending_direct_rw, pending_hash_rw,
                           pending_insert_off_rw))
     return false;
@@ -47,13 +46,13 @@ bool DTX::CompareExeRW(coro_yield_t &yield) {
       pending_next_hash_ro, pending_next_hash_rw, pending_insert_off_rw,
       pending_next_off_rw, pending_invisible_ro, yield);
 
-  if (global_meta_man->txn_system == DTX_SYS::LOCAL) {
-    ParallelUndoLog();
-  }
+  // if (global_meta_man->txn_system == DTX_SYS::LOCAL) {
+  //   ParallelUndoLog();
+  // }
   return res;
 }
 
-bool DTX::CompareLocking(coro_yield_t &yield) {
+bool DTX::CompareLocking(coro_yield_t& yield) {
   std::vector<Lock> pending_lock;
   if (!CompareIssueLocking(pending_lock)) return false;
 
@@ -63,7 +62,7 @@ bool DTX::CompareLocking(coro_yield_t &yield) {
   return res;
 }
 
-bool DTX::CompareValidation(coro_yield_t &yield) {
+bool DTX::CompareValidation(coro_yield_t& yield) {
   std::vector<Version> pending_version_read;
   if (!CompareIssueValidation(pending_version_read)) return false;
 
@@ -73,7 +72,7 @@ bool DTX::CompareValidation(coro_yield_t &yield) {
   return res;
 }
 
-bool DTX::CompareLockingValidation(coro_yield_t &yield) {
+bool DTX::CompareLockingValidation(coro_yield_t& yield) {
   // This is the same with our validation scheme, i.e., lock+read write set,
   // read read set
   std::vector<ValidateRead> pending_validate;
@@ -85,7 +84,7 @@ bool DTX::CompareLockingValidation(coro_yield_t &yield) {
   return res;
 }
 
-bool DTX::CompareCommitBackup(coro_yield_t &yield) {
+bool DTX::CompareCommitBackup(coro_yield_t& yield) {
   tx_status = TXStatus::TX_COMMIT;
 
 #if RFLUSH == 0
@@ -101,7 +100,7 @@ bool DTX::CompareCommitBackup(coro_yield_t &yield) {
   return true;
 }
 
-bool DTX::CompareCommitPrimary(coro_yield_t &yield) {
+bool DTX::CompareCommitPrimary(coro_yield_t& yield) {
   if (!CompareIssueCommitPrimary()) {
     return false;
   }
@@ -109,7 +108,7 @@ bool DTX::CompareCommitPrimary(coro_yield_t &yield) {
   return true;
 }
 
-bool DTX::CompareTruncateAsync(coro_yield_t &yield) {
+bool DTX::CompareTruncateAsync(coro_yield_t& yield) {
   // Truncate: Update backup's data region in an async manner
   if (!CompareIssueTruncate()) {
     return false;

@@ -4,11 +4,11 @@
     "machine_id": 0,
     "local_port": 12346,
     "local_meta_port": 12347,
-    "use_pm": 0,
-    "mem_size_GB": 8,
+    "use_pm": 1,
+    "mem_size_GB": 20,
     "log_buf_size_GB": 1,
-    "pm_root": "/dev/dax0.1",
-    "workload": "SmallBank"
+    "pm_root": "/dev/dax2.0",
+    "workload": "TPCC"
   },
   "remote_compute_nodes": {
     "compute_node_ips": ["10.192.168.119"],

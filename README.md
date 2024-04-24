@@ -44,6 +44,7 @@ After running the ```build.sh``` script, cmake will automatically generate a ```
 ## Run
 
 - For each machine in the memory pool: Start server to load tables.
+
 ```sh
 $ cd hdtx
 $ cd ./build/memory_pool/server
@@ -51,16 +52,10 @@ $ sudo ./mem_pool
 ```
 
 - For each machine in the compute pool: After loading database tables in the memory pool, we run a benchmark, e.g., SmallBank.
+
 ```sh
 $ cd hdtx
 $ cd ./build/compute_pool/run
 $ ./run smallbank hdtx 16 8 # run hdtx with 16 threads and each thread spawns 8 coroutines
 ```
-
-
-# Acknowledgments
-
-We sincerely thank the following open source repos that help us shorten the developing process
-
-- [FORD](https://github.com/minghust/ford): We build our system based on **FORD** to simplify the development cycle.
 

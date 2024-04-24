@@ -2,11 +2,14 @@
   "local_compute_node": {
     "machine_num": 1,
     "machine_id": 0,
-"thread_num_per_machine": 16,
-"coroutine_num": 8,
+    "thread_num_per_machine": 16,
+    "coroutine_num": 8,
     "local_port": 12345,
-"txn_system": 4,
-    "comment": "0 is farm, 1 is drtmh, 2 is ford 3 is local 4 is hdtx"
+    "txn_system": 2,
+    "comment": "0 is farm, 1 is ford, 2 is hdtx",
+    "sla_timeout": 1200,
+    "use_priority": 1,
+    "use_sample_priority": 1
   },
   "remote_pm_nodes": {
     "remote_ips": [

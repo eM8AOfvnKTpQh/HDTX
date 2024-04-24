@@ -1,5 +1,4 @@
-# Author: Ming Zhang
-# Copyright (c) 2022
+ 
 
 set(DB_SOURCES tpcc_db.cc)
 set(TXN_SOURCES tpcc_txn.cc)

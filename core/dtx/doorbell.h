@@ -65,7 +65,10 @@ class WriteUnlockBatch : public DoorbellBatch {
 
   // Send doorbelled requests to the queue pair
   bool SendReqs(CoroutineScheduler *coro_sched, RCQP *qp, coro_id_t coro_id,
-                bool use_off, bool use_atomic);
+                bool use_off);
+
+ private:
+  bool use_atomic = false;
 };
 
 class InvisibleWriteBatch : public DoorbellBatch {
@@ -173,5 +176,31 @@ class ComparatorUpdateRemote {
 
   struct ibv_sge sge[3];
 
+  struct ibv_send_wr *bad_sr;
+};
+
+class ReadVersionVisibilityBatch : public DoorbellBatch {
+ public:
+  ReadVersionVisibilityBatch() {
+    sr[0].num_sge = 1;
+    sr[0].sg_list = &sge[0];
+    sr[0].send_flags = 0;
+    sr[0].next = &sr[1];
+
+    sr[1].num_sge = 1;
+    sr[1].sg_list = &sge[1];
+    sr[1].send_flags = IBV_SEND_SIGNALED;
+    sr[1].next = nullptr;
+  }
+
+  void SetReadVersionReq(char *local_addr, uint64_t remote_off);
+
+  void SetReadVisibilityReq(char *local_addr, uint64_t remote_off);
+
+  bool SendReqs(CoroutineScheduler *coro_sched, RCQP *qp, coro_id_t coro_id);
+
+ private:
+  struct ibv_send_wr sr[2];
+  struct ibv_sge sge[2];
   struct ibv_send_wr *bad_sr;
 };

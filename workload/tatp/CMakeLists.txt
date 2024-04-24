@@ -1,5 +1,4 @@
-# Author: Ming Zhang
-# Copyright (c) 2022
+ 
 
 set(DB_SOURCES tatp_db.cc)
 set(TXN_SOURCES tatp_txn.cc)

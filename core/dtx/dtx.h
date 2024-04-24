@@ -125,13 +125,16 @@ class DTX {
                    std::vector<HashRead> &pending_hash_rw,
                    std::vector<InsertOffRead> &pending_insert_off_rw);
 
-  bool IssueReadLock(std::vector<LockRead> &pending_lock_rw,
-                     std::vector<HashRead> &pending_hash_rw,
-                     std::vector<InsertOffRead> &pending_insert_off_rw);
+  bool IssueReadLock(std::vector<HashRead> &pending_hash_rw,
+                     std::vector<InsertOffRead> &pending_insert_off_rw,
+                     std::list<LockRead> &pending_lock_rw);
 
   ValStatus IssueLocalValidate(std::vector<ValidateRead> &pending_validate);
 
   bool IssueRemoteValidate(std::vector<ValidateRead> &pending_validate);
+
+  bool IssueValidateVersionAndVisibility(
+      std::vector<ValidateRead> &pending_validate);
 
   bool IssueInvisableAll(std::vector<ReleaseWrite> &pending_release);
 
@@ -161,12 +164,23 @@ class DTX {
                      std::vector<HashRead> &pending_hash_ro,
                      std::vector<HashRead> &pending_hash_rw,
                      std::vector<InsertOffRead> &pending_insert_off_rw,
-                     std::vector<LockRead> &pending_lock_rw,
+                     std::list<LockRead> &pending_lock_rw,
                      std::list<InvisibleRead> &pending_invisible_ro,
                      std::list<HashRead> &pending_next_hash_ro,
                      std::list<HashRead> &pending_next_hash_rw,
                      std::list<InsertOffRead> &pending_next_off_rw,
                      coro_yield_t &yield);
+
+  bool CheckReadRORWLock(std::vector<DirectRead> &pending_direct_ro,
+                         std::vector<HashRead> &pending_hash_ro,
+                         std::vector<HashRead> &pending_hash_rw,
+                         std::vector<InsertOffRead> &pending_insert_off_rw,
+                         std::list<LockRead> &pending_lock_rw,
+                         std::list<InvisibleRead> &pending_invisible_ro,
+                         std::list<HashRead> &pending_next_hash_ro,
+                         std::list<HashRead> &pending_next_hash_rw,
+                         std::list<InsertOffRead> &pending_next_off_rw,
+                         coro_yield_t &yield);
 
   bool CheckDirectRO(std::vector<DirectRead> &pending_direct_ro,
                      std::list<InvisibleRead> &pending_invisible_ro,
@@ -181,10 +195,14 @@ class DTX {
   bool CheckNextHashRO(std::list<InvisibleRead> &pending_invisible_ro,
                        std::list<HashRead> &pending_next_hash_ro);
 
-  bool CheckLockRW(std::vector<LockRead> &pending_lock_rw,
-                   std::vector<LockRead> &pending_locked_rw, char *cas_buf);
+  bool CheckCasRW(std::list<LockRead> &pending_lock_rw,
+                  std::list<HashRead> &pending_next_hash_rw,
+                  std::list<InsertOffRead> &pending_next_off_rw);
 
-  bool CheckValidRW(std::vector<LockRead> &pending_locked_rw);
+  bool CheckLockRW(std::list<LockRead> &pending_lock_rw,
+                   std::list<LockRead> &pending_locked_rw, char *cas_buf);
+
+  bool CheckValidRW(std::list<LockRead> &pending_locked_rw);
 
   int FindMatchSlot(HashRead &res,
                     std::list<InvisibleRead> &pending_invisible_ro);
@@ -207,6 +225,8 @@ class DTX {
                       std::list<InsertOffRead> &pending_next_off_rw);
 
   bool CheckValidate(std::vector<ValidateRead> &pending_validate);
+
+  bool CheckVersionAndVisibility(std::vector<ValidateRead> &pending_validate);
 
   bool CheckCommitAll(std::vector<CommitWrite> &pending_commit_write,
                       char *cas_buf);
@@ -287,6 +307,8 @@ class DTX {
 
   coro_id_t coro_id;  // Coroutine ID
 
+  u_id_t u_id;  // Unique ID, used for CAS
+
  public:
   // For statistics
   std::vector<uint64_t> lock_durations;  // us
@@ -305,7 +327,7 @@ class DTX {
 
   TXError tx_error;
 
-  LockMode lock_mode = NORMAL;
+  LockMode lock_mode;
 
  private:
   CoroutineScheduler *coro_sched;  // Thread local coroutine scheduler
@@ -323,9 +345,10 @@ class DTX {
 
   std::vector<DataSetItem> read_write_set;
 
-  std::vector<size_t> not_locked_rw_set;  // For eager logging
+  std::list<size_t> not_locked_rw_set;  // Used to record unlocked items
 
-  std::vector<size_t> locked_rw_set;  // For release lock during abort
+  std::list<size_t>
+      locked_rw_set;  // Used to release lock after transaction failure
 
   AddrCache *addr_cache;
 
@@ -446,7 +469,8 @@ bool DTX::RDMAReadRoundTrip(RCQP *qp, char *rd_data, uint64_t remote_offset,
 
 ALWAYS_INLINE
 void DTX::Clean() {
-  tx_error = NO_ERROR;
+  tx_status = TXStatus::TX_INIT;
+  tx_error = TXError::NO_ERROR;
   read_only_set.clear();
   read_write_set.clear();
   not_locked_rw_set.clear();

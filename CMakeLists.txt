@@ -1,6 +1,8 @@
+
+
 cmake_minimum_required(VERSION 3.3)
 
-project(HDTX)
+project(FORD)
 
 set(CMAKE_CXX_STANDARD 11)
 
@@ -25,6 +27,6 @@ add_subdirectory(core)
 
 add_subdirectory(workload)
 
-add_subdirectory(compute_pool) # Dep list: rlib->ford->workload_db+_txn->worker
+add_subdirectory(compute_pool) 
 
-add_subdirectory(memory_pool) # Dep list: rlib->workload_db->server
+add_subdirectory(memory_pool) 

@@ -68,7 +68,7 @@ class RdmaCtrl::RdmaCtrlImpl {
 
   ~RdmaCtrlImpl() {
     running_ = false;  // wait for the handler to join
-    pthread_join(handler_tid_, NULL);
+    pthread_join(handler_tid_, nullptr);
     // RDMA_LOG(DBG) << "rdma controler close: does not handle any future
     // connections.";
   }
@@ -179,7 +179,7 @@ class RdmaCtrl::RdmaCtrlImpl {
       if (qps_.find(qid) != qps_.end()) {
         res = dynamic_cast<RCQP*>(qps_[qid]);
       } else {
-        if (attr == NULL)
+        if (attr == nullptr)
           res = new RCQP(dev, idx);
         else
           res = new RCQP(dev, idx, *attr);
@@ -198,7 +198,7 @@ class RdmaCtrl::RdmaCtrlImpl {
       if (qps.find(qid) != qps.end()) {
         res = dynamic_cast<RCQP*>(qps[qid]);
       } else {
-        if (attr == NULL)
+        if (attr == nullptr)
           res = new RCQP(dev, idx, create_flags);
         else
           res = new RCQP(dev, idx, *attr, create_flags);
@@ -223,7 +223,7 @@ class RdmaCtrl::RdmaCtrlImpl {
       if (qps_.find(qid) != qps_.end()) {
         res = dynamic_cast<UDQP*>(qps_[qid]);
       } else {
-        if (attr == NULL)
+        if (attr == nullptr)
           res = new UDQP(dev, idx);
         else
           res = new UDQP(dev, idx, *attr);
@@ -411,7 +411,7 @@ class RdmaCtrl::RdmaCtrlImpl {
             };
             break;
           case ConnArg::QP: {
-            QP* qp = NULL;
+            QP* qp = nullptr;
             switch (arg.payload.qp.qp_type) {
               case IBV_QPT_UD: {
                 UDQP* ud_qp = get_qp<UDQP, get_ud_key>(create_ud_idx(
@@ -431,7 +431,7 @@ class RdmaCtrl::RdmaCtrlImpl {
                     << ", client worker id: " << arg.payload.qp.from_worker;
                 qp = get_qp<RCQP, get_rc_key>(idx);  // For multi round tests
                 if (qp == nullptr) {
-                  qp = create_rc_qp(idx, opened_rnic, NULL);
+                  qp = create_rc_qp(idx, opened_rnic, nullptr);
 
                   RDMA_LOG(INFO) << "create new RCQP for connection";
                   if (!RCQPImpl::readytorcv(qp->qp_, arg.payload.qp.qp_attr,
@@ -449,10 +449,10 @@ class RdmaCtrl::RdmaCtrlImpl {
                 if (arg.use_offload) {  // use offload
                   // create self-connect qps for offload operations
                   RCQP* wait_qp =
-                      create_rc_qp(idx, opened_rnic, NULL, wait_qps_,
+                      create_rc_qp(idx, opened_rnic, nullptr, wait_qps_,
                                    IBV_EXP_QP_CREATE_MANAGED_SEND);
                   RCQP* self_qp =
-                      create_rc_qp(idx, opened_rnic, NULL, self_qps_);
+                      create_rc_qp(idx, opened_rnic, nullptr, self_qps_);
 
                   // connect to itself
                   wait_qp->connect(self_qp);
@@ -492,7 +492,7 @@ class RdmaCtrl::RdmaCtrlImpl {
   friend class RdmaCtrl;
 
   static RNicHandler*& rnic_instance() {
-    static thread_local RNicHandler* handler = NULL;
+    static thread_local RNicHandler* handler = nullptr;
     return handler;
   }
 

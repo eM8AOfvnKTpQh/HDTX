@@ -1,6 +1,4 @@
-// Author: Ming Zhang
-// Copyright (c) 2022
-
+ 
 #pragma once
 
 #include <cassert>

@@ -1,6 +1,4 @@
-// Author: Ming Zhang
-// Copyright (c) 2022
-
+ 
 #include "smallbank_db.h"
 
 #include "unistd.h"

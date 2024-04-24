@@ -6,6 +6,8 @@
 #include "mr.hpp"
 #include "rnic.hpp"
 
+#define EXP_VERBS
+
 namespace rdmaio {
 
 // connection status

@@ -1,27 +1,27 @@
 #include "dtx/dtx.h"
 #include "util/timer.h"
 
-bool DTX::CheckDirectRO(std::vector<DirectRead> &pending_direct_ro,
-                        std::list<InvisibleRead> &pending_invisible_ro,
-                        std::list<HashRead> &pending_next_hash_ro) {
+bool DTX::CheckDirectRO(std::vector<DirectRead>& pending_direct_ro,
+                        std::list<InvisibleRead>& pending_invisible_ro,
+                        std::list<HashRead>& pending_next_hash_ro) {
   // Check results from direct read via local cache
-  for (auto &res : pending_direct_ro) {
-    auto *it = res.item->item_ptr.get();
-    auto *fetched_item = (DataItem *)res.buf;
+  for (auto& res : pending_direct_ro) {
+    auto* it = res.item->item_ptr.get();
+    auto* fetched_item = (DataItem*)res.buf;
     if (likely(fetched_item->key == it->key &&
                fetched_item->table_id == it->table_id)) {
       if (likely(fetched_item->valid)) {
         *it = *fetched_item;
         res.item->is_fetched = true;
 #if LOCK_REFUSE_READ_RO
-        if (it->lock == encode_id(t_id, coro_id)) return false;
+        if (it->lock == u_id) return false;
 #else
         if (unlikely((it->lock & STATE_INVISIBLE))) {
 #if INV_ABORT
           return false;
 #endif
           // This item is invisible, we need re-read
-          char *cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
+          char* cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
           uint64_t lock_offset = it->GetRemoteLockAddr(it->remote_offset);
           pending_invisible_ro.emplace_back(
               InvisibleRead{.qp = res.qp, .buf = cas_buf, .off = lock_offset});
@@ -43,18 +43,18 @@ bool DTX::CheckDirectRO(std::vector<DirectRead> &pending_direct_ro,
       // deleted Local cache does not have. We have to re-read via hash
       node_id_t remote_node_id =
           global_meta_man->GetPrimaryNodeID(it->table_id);
-      const HashMeta &meta =
+      const HashMeta& meta =
           global_meta_man->GetPrimaryHashMetaWithTableID(it->table_id);
       uint64_t idx = MurmurHash64A(it->key, 0xdeadbeef) % meta.bucket_num;
       offset_t node_off = idx * meta.node_size + meta.base_off;
-      auto *local_hash_node =
-          (HashNode *)thread_rdma_buffer_alloc->Alloc(sizeof(HashNode));
+      auto* local_hash_node =
+          (HashNode*)thread_rdma_buffer_alloc->Alloc(sizeof(HashNode));
       pending_next_hash_ro.emplace_back(HashRead{.qp = res.qp,
                                                  .item = res.item,
-                                                 .buf = (char *)local_hash_node,
+                                                 .buf = (char*)local_hash_node,
                                                  .remote_node = remote_node_id,
                                                  .meta = meta});
-      if (!coro_sched->RDMARead(coro_id, res.qp, (char *)local_hash_node,
+      if (!coro_sched->RDMARead(coro_id, res.qp, (char*)local_hash_node,
                                 node_off, sizeof(HashNode)))
         return false;
     }
@@ -62,16 +62,16 @@ bool DTX::CheckDirectRO(std::vector<DirectRead> &pending_direct_ro,
   return true;
 }
 
-bool DTX::CheckHashRO(std::vector<HashRead> &pending_hash_ro,
-                      std::list<InvisibleRead> &pending_invisible_ro,
-                      std::list<HashRead> &pending_next_hash_ro) {
+bool DTX::CheckHashRO(std::vector<HashRead>& pending_hash_ro,
+                      std::list<InvisibleRead>& pending_invisible_ro,
+                      std::list<HashRead>& pending_next_hash_ro) {
   // Check results from hash read
-  for (auto &res : pending_hash_ro) {
-    auto *local_hash_node = (HashNode *)res.buf;
-    auto *it = res.item->item_ptr.get();
+  for (auto& res : pending_hash_ro) {
+    auto* local_hash_node = (HashNode*)res.buf;
+    auto* it = res.item->item_ptr.get();
     bool find = false;
 
-    for (auto &item : local_hash_node->data_items) {
+    for (auto& item : local_hash_node->data_items) {
       if (item.valid && item.key == it->key && item.table_id == it->table_id) {
         *it = item;
         addr_cache->Insert(res.remote_node, it->table_id, it->key,
@@ -84,14 +84,14 @@ bool DTX::CheckHashRO(std::vector<HashRead> &pending_hash_ro,
 
     if (likely(find)) {
 #if LOCK_REFUSE_READ_RO
-      if (it->lock == encode_id(t_id, coro_id)) return false;
+      if (it->lock == u_id) return false;
 #else
       if (unlikely((it->lock & STATE_INVISIBLE))) {
 #if INV_ABORT
         return false;
 #endif
         // This item is invisible, we need re-read
-        char *cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
+        char* cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
         uint64_t lock_offset = it->GetRemoteLockAddr(it->remote_offset);
         pending_invisible_ro.emplace_back(
             InvisibleRead{.qp = res.qp, .buf = cas_buf, .off = lock_offset});
@@ -124,7 +124,7 @@ bool DTX::CheckHashRO(std::vector<HashRead> &pending_hash_ro,
   return true;
 }
 
-bool DTX::CheckInvisibleRO(std::list<InvisibleRead> &pending_invisible_ro) {
+bool DTX::CheckInvisibleRO(std::list<InvisibleRead>& pending_invisible_ro) {
 #if INV_BUSY_WAIT
   Timer timer;
   timer.Start();
@@ -133,7 +133,7 @@ bool DTX::CheckInvisibleRO(std::list<InvisibleRead> &pending_invisible_ro) {
   for (auto iter = pending_invisible_ro.begin();
        iter != pending_invisible_ro.end();) {
     auto res = *iter;
-    auto lock_value = *((lock_t *)res.buf);
+    auto lock_value = *((lock_t*)res.buf);
     while (lock_value & STATE_INVISIBLE) {
       // TLOG(DBG, t_id) << "invisible data LOCK VALUE IS: " << std::hex <<
       // lock_value; RDMA_LOG(DBG) << "LOCK VALUE IS: " << std::hex <<
@@ -153,7 +153,7 @@ bool DTX::CheckInvisibleRO(std::list<InvisibleRead> &pending_invisible_ro) {
                           << rc;
         exit(-1);
       }
-      lock_value = *((lock_t *)res.buf);
+      lock_value = *((lock_t*)res.buf);
       // RDMA_LOG(DBG) << "THREAD " << t_id << " re-read lock: " << std::hex <<
       // lock_value;
     }
@@ -169,10 +169,9 @@ bool DTX::CheckInvisibleRO(std::list<InvisibleRead> &pending_invisible_ro) {
   for (auto iter = pending_invisible_ro.begin();
        iter != pending_invisible_ro.end();) {
     auto res = *iter;
-    auto lock_value = *((lock_t *)res.buf);
+    auto lock_value = *((lock_t*)res.buf);
     if (lock_value & STATE_INVISIBLE) {
       // RDMA_LOG(DBG) << "LOCK VALUE IS: " << std::hex << lock_value;
-      //  RDMA_LOG(DBG) << "addr: " << (res.qp->remote_mr_.buf + res.off);
       if (!coro_sched->RDMARead(coro_id, res.qp, res.buf, res.off,
                                 sizeof(lock_t)))
         return false;
@@ -187,16 +186,16 @@ bool DTX::CheckInvisibleRO(std::list<InvisibleRead> &pending_invisible_ro) {
   return true;
 }
 
-bool DTX::CheckNextHashRO(std::list<InvisibleRead> &pending_invisible_ro,
-                          std::list<HashRead> &pending_next_hash_ro) {
+bool DTX::CheckNextHashRO(std::list<InvisibleRead>& pending_invisible_ro,
+                          std::list<HashRead>& pending_next_hash_ro) {
   for (auto iter = pending_next_hash_ro.begin();
        iter != pending_next_hash_ro.end();) {
     auto res = *iter;
-    auto *local_hash_node = (HashNode *)res.buf;
-    auto *it = res.item->item_ptr.get();
+    auto* local_hash_node = (HashNode*)res.buf;
+    auto* it = res.item->item_ptr.get();
     bool find = false;
 
-    for (auto &item : local_hash_node->data_items) {
+    for (auto& item : local_hash_node->data_items) {
       if (item.valid && item.key == it->key && item.table_id == it->table_id) {
         *it = item;
         addr_cache->Insert(res.remote_node, it->table_id, it->key,
@@ -208,14 +207,14 @@ bool DTX::CheckNextHashRO(std::list<InvisibleRead> &pending_invisible_ro,
     }
     if (likely(find)) {
 #if LOCK_REFUSE_READ_RO
-      if (it->lock == encode_id(t_id, coro_id)) return false;
+      if (it->lock == u_id) return false;
 #else
       if (unlikely((it->lock & STATE_INVISIBLE))) {
 #if INV_ABORT
         return false;
 #endif
         // This item is invisible, we need re-read
-        char *cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
+        char* cas_buf = thread_rdma_buffer_alloc->Alloc(sizeof(lock_t));
         uint64_t lock_offset = it->GetRemoteLockAddr(it->remote_offset);
         pending_invisible_ro.emplace_back(
             InvisibleRead{.qp = res.qp, .buf = cas_buf, .off = lock_offset});

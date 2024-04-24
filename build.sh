@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 BUILD_TARGET=client
 BUILD_TYPE=Release
 

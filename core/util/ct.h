@@ -1,5 +1,4 @@
-// Author: Ming Zhang
-// Copyright (c) 2022
+
 
 // A concurrent table based on hash
 #pragma once
