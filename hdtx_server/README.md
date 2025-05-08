@@ -1,10 +1,6 @@
 # HDTX
 
 
-## Preview
-
-Please deploy the ```hdtx_client``` on compute nodes and the ```hdtx_server``` on memory nodes.
-
 ## Dependencies
 
 - Hardware
@@ -29,6 +25,7 @@ $ git clone https://github.com/eM8AOfvnKTpQh/HDTX.git
 $ cd hdtx
 ```
 
+
 - For each machine in the memory pool: 
 
 ```sh 
@@ -42,6 +39,7 @@ $ ./build.sh
 ```
 
 After running the ```build.sh``` script, cmake will automatically generate a ```build/``` directory in which all the compiled libraries and executable files are stored.
+
 
 ## Preparations
 
@@ -73,7 +71,6 @@ and
 ```
 To use PM on the memory node, the ```use_pm``` in ```HDTX_server/config/memory_node_config.json``` should be set to ```1``` and the ```pm_root``` is set to the path where PM is mounted, e.g., ```/dev/dax2.0```. To mount PM as chardev, please refer to https://stevescargall.com/blog/2019/07/how-to-extend-volatile-system-memory-ram-using-persistent-memory-on-linux/.
 
-
 ## Run
 
 - For each machine in the memory pool: Start server to load tables.
@@ -84,11 +81,17 @@ $ cd ./build/memory_pool/server
 $ sudo ./mem_pool
 ```
 
-- For each machine in the compute pool: After loading database tables in the memory pool, we run a benchmark, e.g., SmallBank.
+- For each machine in the compute pool: After loading database tables in the memory pool, we run a macro-benchmark, e.g., SmallBank.
 
 ```sh
 $ cd hdtx
 $ cd ./build/compute_pool/run
-$ ./run smallbank hdtx 16 8 # run hdtx with 16 threads and each thread spawns 8 coroutines
+$ ./run_macro smallbank hdtx 16 8 # run hdtx with 16 threads and each thread spawns 8 coroutines
 ```
 
+For micro-benchmark 
+```sh
+$ cd hdtx
+$ cd ./build/compute_pool/run
+$ ./run_micro s-50 (./run_micro u-100)# run micro-benchmark with a skewed/(uniform) distribution under a 50:50/(0:100) read-write ratio.
+```

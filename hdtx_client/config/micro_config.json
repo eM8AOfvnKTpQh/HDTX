@@ -1,0 +1,11 @@
+{
+  "micro": {
+    "num_keys": 1000000,
+"is_skewed": true,
+    "zipf_theta": 0.99,
+    "data_set_size": 2,
+"write_ratio": 100,
+    "attempted_num": 100000,
+	"wait_time" : 1000
+  }
+}

@@ -1,0 +1,6 @@
+set(RUN_SRC1 run.cc)
+set(RUN_SRC2 run_micro.cc)
+add_executable(run_macro ${RUN_SRC1})
+add_executable(run_micro ${RUN_SRC2})
+target_link_libraries(run_macro worker)
+target_link_libraries(run_micro worker)

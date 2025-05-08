@@ -1,10 +1,6 @@
 # HDTX
 
 
-## Preview
-
-Please deploy the ```hdtx_client``` on compute nodes and the ```hdtx_server``` on memory nodes.
-
 ## Dependencies
 
 - Hardware

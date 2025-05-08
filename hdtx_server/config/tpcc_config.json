@@ -1,0 +1,6 @@
+{
+  "tpcc": {
+    "attempted_num": 50000,
+	"wait_time":1000
+  }
+}
