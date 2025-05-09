@@ -283,18 +283,23 @@ void Handler::OutputResult(std::string bench_name, std::string system_name) {
 
   if (bench_name == "MICRO") {
     std::cerr << system_name << " " 
-              << " tp=" << total_tp / 1000 << " mid="
-              << " " << avg_median << " tail=" << avg_tail
-              << " avg=" << avg_avglat << " sla=" << avg_sla
-              << " com=" << avg_commit << " sa_avg=" << avg_sample_avglat
-              << " sa_tail=" << avg_sample_taillat
-              << " sa_com=" << avg_sample_commit << std::endl;
+              << " throughput=" << total_tp / 1000 
+              << " averageLatency=" << avg_avglat 
+              << " tailLatency=" << avg_tail 
+              << " slaRates=" << avg_sla
+              << " committedRates=" << avg_commit 
+              << " sample_avg=" << avg_sample_avglat
+              << " sample_tail=" << avg_sample_taillat
+              << " sample_com=" << avg_sample_commit 
+              << std::endl;
   } else {
     std::cerr << system_name << " " 
-              << " tp=" << total_tp / 1000 << " mid="
-              << " " << avg_median << " tail=" << avg_tail
-              << " avg=" << avg_avglat << " sla=" << avg_sla
-              << " com=" << avg_commit << " valfail=" << avg_val_fail
+              << " throughput=" << total_tp / 1000 
+              << " averageLatency=" << avg_avglat 
+              << " tailLatency=" << avg_tail
+              << " slaRates=" << avg_sla
+              << " committedRates=" << avg_commit 
+              << " validationFailureRates=" << avg_val_fail
               << std::endl;
   }
   // Open it when testing the duration
