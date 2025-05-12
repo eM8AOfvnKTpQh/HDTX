@@ -4,9 +4,6 @@ cmake_minimum_required(VERSION 3.3)
 
 project(HDTX)
 
-set(CMAKE_C_COMPILER "/usr/local/gcc-10.1.0/bin/gcc")
-set(CMAKE_CXX_COMPILER "/usr/local/gcc-10.1.0/bin/g++")
-
 set(CMAKE_CXX_STANDARD 11)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-result -fPIC")

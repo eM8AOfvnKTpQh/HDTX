@@ -4,7 +4,7 @@
     "machine_id": 0,
     "local_port": 12346,
     "local_meta_port": 12347,
-    "use_pm": 1,
+    "use_pm": 1, // set use_pm to 0 to test on DRAM
     "mem_size_GB": 16,
     "log_buf_size_GB": 1,
     "pm_root": "/dev/dax2.0",

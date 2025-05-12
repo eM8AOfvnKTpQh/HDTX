@@ -14,6 +14,7 @@ Please deploy the ```hdtx_client``` on compute nodes and the ```hdtx_server``` o
   - Operating System: Ubuntu 18.04 LTS or CentOS 7
   - Programming Language: C++ 11
   - Compiler: g++ 7.5.0 (at least)
+  - OFED driver: MLNX_OFED_LINUX-4** (MLNX_OFED_LINUX-5** is incompatible due to API changes)
   - Libraries: ibverbs, pthread, boost_coroutine, boost_context, boost_system
 - Machines
   - At least 3 machines, in which one acts as the compute pool and other two act as the memory pool to maintain a primary-backup replication
@@ -92,3 +93,8 @@ $ cd ./build/compute_pool/run
 $ ./run smallbank hdtx 16 8 # run hdtx with 16 threads and each thread spawns 8 coroutines
 ```
 
+## Acknowledgments
+
+This project is built upon the excellent RDMA communication framework from FORD [FAST'22]. We sincerely thank the authors for their groundbreaking work and for open-sourcing their implementation.
+
+Reference: Ming Zhang, Yu Hua, Pengfei Zuo, and Lurong Liu. FORD: Fast One-sided RDMA-based Distributed Transactions for Disaggregated Persistent Memory. In Proceedings of the 20th USENIX Conference on File and Storage Technologies (FAST’22), pages 51–68, 2022.
