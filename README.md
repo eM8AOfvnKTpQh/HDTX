@@ -138,10 +138,10 @@ $ cd HDTX
 $ cd ./build/compute_pool/run
 $ ./run_macro <Workload> <SystemName> <Threads> <Coroutines>
 ```
- Workload: ```tpcc```/```smallbank```/```tatp```
- SystemName: ```hdtx```/```farm```/```ford```
- Threads: any numbers greater than 0 (e.g. ```1```/```8```/```16```)
- Coroutines: any numbers greater than 1 (e.g. ```2```/```8```/```16```)
+ 1. Workload: ```tpcc```/```smallbank```/```tatp```
+ 2. SystemName: ```hdtx```/```farm```/```ford```
+ 3. Threads: any numbers greater than 0 (e.g. ```1```/```8```/```16```)
+ 4. Coroutines: any numbers greater than 1 (e.g. ```2```/```8```/```16```)
 
 e.g. ```./run_macro smallbank hdtx 16 8``` to run HDTX under the SmallBank with 16 threads and each thread spawns 8 coroutines.
 
@@ -160,8 +160,8 @@ $ cd HDTX
 $ cd ./build/compute_pool/run
 $ ./run_micro <Distribution>-<WriteRates>
 ```
- Distribution: ```s``` and ```u``` for skew and uniform distributions, respectively.
- WriteRates: any number from 0 to 100 (e.g. ```0```/```50```/```100```)
+ 1. Distribution: ```s``` and ```u``` for skew and uniform distributions, respectively.
+ 2. WriteRates: any number from 0 to 100 (e.g. ```0```/```50```/```100```)
 
 e.g. ```./run_micro s-75``` to run HDTX with 75 percents write rates for the skewed access distribution under the micro-benchmark.
 
